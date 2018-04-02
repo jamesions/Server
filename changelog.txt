@@ -1,7 +1,218 @@
 EQEMu Changelog (Started on Sept 24, 2003 15:50)
 -------------------------------------------------------
+== 03/28/2018 ==
+Kayen: SE_CastOnFadeEffect, SE_CastOnFadeEffectNPC, SE_CastOnFadeEffectAlway triggered spell will now hit
+the correct targets.
+
+
+== 03/07/2018 ==
+Uleat: Added command '#ucs' to force a reconnect to UCS server.
+	- Works in place of client auto-reconnect packet in zones where feature is unsupported
+	- Currently, you will need to manually re-join channels
+
+== 03/04/2018 ==
+Uleat: Updated UCS versioning
+	- SoF and higher clients have a new opcode identified (update your *.conf files)
+	- Rework of previous ucs connectivity code
+	- Unrelated: Zone::weatherSend() now takes an optional parameter for singular updates (as in client entering zone)
+	-- prior to this, every client already in-zone received a weather update packet whenever a new client zoned in
+
+== 02/18/2018 ==
+Uleat: Bug reporting fix and overhaul.
+	- Fixed bug reporting for SoD+ clients
+	- Added ability to disable bug reporting (set rule 'Bugs:ReportingSystemActive' to 'false')
+	- Implemented a more detailed reporting system (set rule 'Bugs:UseOldReportingMethod' to 'false')
+	-- New system is not currently compatible with script-based monitoring
+	- Soft-removal of defunct 'Petition Bug' system
+
+== 02/14/2018 ==
+mackal: Fix Heading -- Quests broken
+
+Please report any other issues with heading, most things were tested and worked
+
+You can use eqemu_server.pl to run a conversion to fix your headings in quests.
+Some may need manual review.
+
+== 02/10/2018 ==
+mackal: Add Global Loot system
+
+This will allow us to implement global loot similarly to how it works on live
+This system reuses our current loottable tables which the global_loot table references.
+The limits for the rules to govern if a table should be rolled are min level, max level, rare,
+raid, race, class, bodytype, and zone
+
+race, class, bodytype, and zone are a pipe | separated list of IDs.
+
+== 01/31/2018 ==
+Uleat: Re-work of Bot::AI_Process(). Overall behavior is much improved.
+	- Removed a 'ton' of unneeded packet updates
+	- Added a 'leash' to the distance a bot can travel
+	- Added a 'main assist' feature to target control (set using group roles)
+	- Added combat 'jitter' movement to complement the existing rogue movement
+	- Attack can now be aborted if target contains no leash owner nor bot hate and leash owner turns off auto-attack
+	- Please report any issues with the bot AI code
+	
+Added a work-around for heal rotations crashing the server - under certain conditions.
+
+== 01/28/2018 ==
+Mackal: Spell AI tweaks
+
+AI spells are treated as "innate" spells (devs use this term, and I think this is what they mean by it)
+These spells are spammed by the NPC, lots of encounters on live work like this and this will greatly reduce
+the need to do quest scripting on these types of encounters.
+
+You can safely run update npc_spells_entries set priority = priority + 1 where priority >= 0; if you want to disable this new behavior
+
+== 10/08/2017 ==
+Mackal: Rework regens
+
+Regen will now match whats reported by modern clients, besides where they lie due to known bugs
+
+HP and END regens are now based on the BaseData.txt values allowing easy customization
+Those cases:
+	- The client always applies hunger penalties, it appears they don't exist anymore on live you can turn them on with a rule
+	- The way the client gets buff mana/end regen benefits incorrectly applies the bard mod making these values lie sometimes
+
+== 9/17/2017 ==
+Akkadius: Add model/race offset to FixZ calc (KLS)
+Akkadius: Fix 95% of food/water consumption issues, if there are additional modifiers for race/class combos - those will need to be applied
+
+Stages should be put in place if not already:
+https://wiki.project1999.com/Food_and_drink#Stages_of_Hunger_and_Thirst
+
+Values stored in the database are 0-6000, previously we capped it at 6000 but previous math would have normal values in the 60k+ range in order for food to be consumed at a reasonable rate. We are now using more native logic where 1 = 1 minute, following logic:
+
+(Minutes)
+0 -  5	- This is a snack.
+6 -  20	- This is a meal.
+21 - 30	- This is a hearty meal.
+31 - 40	- This is a banquet size meal.
+41 - 50	- This meal is a feast!
+51 - 60	- This is an enduring meal!
+61 - X	- This is a miraculous meal!
+
+== 7/14/2017 ==
+Akkadius: HP Update tuning - HP Updates are now forced when a client is targeted
+Akkadius: Client position updates should be smoother (granted the client has a good connection)
+	- Clients should also no longer randomly disappear 
+
+== 7/11/2017 ==
+Akkadius: Raid/Group/XTarget HP/Mana/Endurance updates now only send when percentage changes
+Akkadius: Raid/Group Mana/Endurance updates should now update real-time once again
+Akkadius: Fixed an issue with clients looking like they are 'skipping' when they are moving in view of another client
+Akkadius: Fixed an issue with NPC's who are ghosted in plain view of a client when they are not really there
+
+== 7/9/2017 ==
+Akkadius: Fix HP update issues, rework logic for more accurate HP updates
+Akkadius: Massive reductions in unnecessary network traffic especially during high spam combat fights
+	- HP Updates now only send to others when HP percentage changes (0-100%)
+		- HP Updates were sending excessively even during idle zones when HP wasn't changing at all
+	- Attack animations now only send once per second versus up to a hundred times a second per Mob/Client
+	- 17,000 OP_ClientUpdate packets per second have been observed in combat scenarios, some of the major culprits have been
+		throttled without affecting what the client should see
+	- Before and After packet differences under similar load/tests (Packets per second)
+		- 7,000 - 8,000 	OP_Animation pps	After: 600-800 pps
+		- 13,0000 - 17,000 	OP_MobHealth pps	After: 1-10 pps
+		- 15,0000 - 20,000 	OP_ClientUpdate pps	After: 500-1,000 pps
+	- Packet reports from a 46 client test here:
+		https://gist.github.com/Akkadius/28b7ad2fdd82bdd15ea737c68f404346
+	- Servers who use Marquee HP updates will also recieve far less packet spam as they will only be sent when HP changes
+
+== 7/1/2017 ==
+Akkadius: Resolve issues with NPC's hopping to the ceiling in small corridors
+Akkadius: Improved grounding issues with NPC's during combat
+Akkadius: Improved scenarios where NPC's need to be dragged out of the ground - they should correct themselves far more consistently
+	- Scenarios where an NPC is coming up from the bottom floor, or from the top floor, they will correct much better
+	- A video of these tests can be found here: https://www.youtube.com/watch?v=HtC7bVNM7ZQ&feature=youtu.be
+
+== 6/28/2017 ==
+Akkadius: Fixed issues with Z correctness when NPCs are pathing on normal grids
+Akkadius: Fixed issues with Z correctness when NPCs are engaged with players following
+Akkadius: NPC corpses should fall into the ground far less
+
+== 6/25/2017 ==
+Akkadius: New rules made by developers are now automatically created when world boots up, this keeps 
+	from having to issue schema SQL updates every time rules are added.
+	- Whenever a rule isn't present in the database, it will be automatically created
+Akkadius: Sped up saylink retrieval x1000 helpful for dialogues, plugins with many saylinks
+
+== 4/16/2017 ==
+KLS: Merge eqstream branch
+	- UDP client stack completely rewritten should both have better throughput and recover better (peq has had far fewer reports of desyncs).
+	- TCP Server to Server connection stack completely rewritten.
+		- Server connections reconnect much more reliably and quickly now.
+		- Now supports optional packet encryption via libsodium (https://download.libsodium.org/doc/).
+		- Protocol behind the tcp connections has changed (see breaking changes section).
+		- API significantly changed and should be easier to write new servers or handlers for.
+		- Telnet console connection has been separated out from the current port (see breaking changes section).
+			- Because of changes to the TCP stack, lsreconnect and echo have been disabled.
+	- The server tic rate has been changed to be approx 30 fps from 500+ fps.
+		- Changed how missiles and movement were calculated slightly to account for this (Missiles in particular are not perfect but close enough).
+	
+	- Breaking changes:
+		- Users who use the cmake install feature should be aware that the install directory is now %cmake_install_dir%/bin instead of just %cmake_install_dir%/
+		- To support new features such as encryption the underlying protocol had to change... however some servers such as the public login server will be slow to change so we've included a compatibility layer for legacy login connections:
+			- You should add <legacy>1</legacy> to the login section of your configuration file when connecting to a server that is using the old protocol.  
+			- The central eqemu login server uses the old protocol and probably will for the forseeable future so if your server is connecting to it be sure to add that tag to your configuration file in that section.
+			- Telnet no longer uses the same port as the Server to Server connection and because of this the tcp tag no longer has any effect on telnet connections.
+				- To enable telnet you need to add a telnet tag in the world section of configuration such as:
+					<telnet ip="0.0.0.0" port="9001" enabled="true"/>
+
+== 4/1/2017 ==
+Akkadius: Cleaned up some of the NPC to NPC aggro code, only do aggro checks to other NPC's when the NPC is flagged for it
+Akkadius: [Performance] Reworked how all log calls are made in the source
+	- Before we used Log.Out, we will now use a macro Log(
+		- Before: Log.Out(Logs::General, Logs::Status, "Importing Spells...");
+		- After: Log(Logs::General, Logs::Status, "Importing Spells...");
+	- The difference is 
+		1) It's 200-300x faster especially when log statements are inside very hot code paths. We already
+			had most hot paths checked before we logged them, but this blankets all existing logging calls now and not just the 
+			select few we had picked out in the source.
+		2) Strings don't get copied to the stack, popped and pushed constantly even when we hit a log statement that 
+			actually isn't going to log anything.
+				- We do an 'if (LogSys.log_settings[log_category].is_category_enabled == 1)' before we call a log function
+					in the log macro so the log function doesn't get called at all if we're not logging the category
+	- This has increased binary executables roughly 15KB
+	- The old extern for EQEmuLogSys is now named LogSys appropriately instead of Log (Ex: LogSys.StartFileLogs())
+	- The result keeps logging footprint non-existent for when we're not logging that category
+
+== 03/30/2017 ==
+Akkadius: [Performance] Fixed an overhead issue where many hot paths would trigger quest subroutines and beneath that the code would
+	try to see if a quest existed perpetually (checking if file exists) even though it should have determined the quest 
+	didn't exist the first time.
+	- This caused a lot of overhead in an instance where an entire zone of NPC's is pathing, triggering EVENT_WAYPOINT_ARRIVE
+	and EVENT_WAYPOINT_DEPART when there is no global_npc.pl/lua, or all NPC's pathing don't have a quest assigned, similar 
+	behavior would occur. This goes for any other type of quests: spells, items, encounters etc.
+
+== 03/28/2017 ==
+Akkadius: [Performance] Fixed a large overhead issue where every single NPC in a zone was checking to depop themselves
+	as a swarm pet every 3ms regardless of being a swarm pet or not. Swarm pets now check to depop only when their timer is up
+Akkadius: [Performance] Removed a timer where clients would constantly calculate light amount on equipment every 600ms, instead 
+	clients will update light when changing equipment or entering a zone
+Akkadius: [Performance] Disabled enraged timer checks for NPC's that do not actually have enrage as a special attack
+Akkadius: [Performance] Don't process ProjectileAttack checks for NPC's that are not engaged in any combat
+
+== 03/27/2017 ==
+Akkadius: [Performance] Reworked how client to NPC aggro checks are made
+	- Before when reverse aggro checks were done (client to NPC), checks would happen every 750 millseconds where a client would
+		check an entire entity list with distance calcs and other checks for aggro, with many clients in a zone and many NPC's this would
+		add a lot of unecessary overhead. A temporary adjustment on 3/25 was made and upped the check to 6 seconds.
+	- Now, there is a new methodology to scanning. The client will build a cache list of NPC's within close range as defined in new rule:
+		RULE_INT(Range, ClientNPCScan, 300) and will also get any NPC that has an aggro range beyond that defined range to use in 
+		the frequent checks for aggro, the result is far less overhead
+	- Client scanning changes when moving versus not moving, the client will scan aggro every 500 milliseconds while moving, and
+		3000 millseconds aggro check when not moving, with a 6000ms re-fetch for close NPC's
+	- A demo of these changes can be found here:
+		https://youtu.be/aGroiwLSTVU
+
+== 03/25/2017 ==
+Akkadius: [Performance] Reduced CPU footprint in non-combat zones doing constant checks for combat related activities
+Akkadius: [Performance] Reduced CPU footprint in cases where a client is checking for aggro excessively every 750 millseconds. This has 
+	been adjusted to 6 seconds per new rule RULE_INT(Aggro, ClientAggroCheckInterval)
+	- When zones have many players, with many NPC's, this adds up quickly
+
 == 03/12/2017 ==
-Akkadius: 
+Akkadius: [Performance]
 - Implemented range rules for packets and other functions
 	RULE_INT ( Range, Say, 135 )
 	RULE_INT ( Range, Emote, 135 )

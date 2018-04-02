@@ -135,6 +135,9 @@ NPC::NPC(const NPCType* d, Spawn2* in_respawn, const glm::vec4& position, int if
 	respawn2 = in_respawn;
 	swarm_timer.Disable();
 
+	if (size < 0.0f)
+		size = GetRaceGenderDefaultHeight(race, gender);
+
 	taunting = false;
 	proximity = nullptr;
 	copper = 0;
@@ -208,6 +211,24 @@ NPC::NPC(const NPCType* d, Spawn2* in_respawn, const glm::vec4& position, int if
 	avoidance_rating = d->avoidance_rating;
 	ATK = d->ATK;
 
+	// used for when switch back to charm
+	default_ac = d->AC;
+	default_min_dmg = min_dmg;
+	default_max_dmg = max_dmg;
+	default_attack_delay = d->attack_delay;
+	default_accuracy_rating = d->accuracy_rating;
+	default_avoidance_rating = d->avoidance_rating;
+	default_atk = d->ATK;
+
+	// used for when getting charmed, if 0, doesn't swap
+	charm_ac = d->charm_ac;
+	charm_min_dmg = d->charm_min_dmg;
+	charm_max_dmg = d->charm_max_dmg;
+	charm_attack_delay = d->charm_attack_delay;
+	charm_accuracy_rating = d->charm_accuracy_rating;
+	charm_avoidance_rating = d->charm_avoidance_rating;
+	charm_atk = d->charm_atk;
+
 	CalcMaxMana();
 	SetMana(GetMaxMana());
 
@@ -227,6 +248,8 @@ NPC::NPC(const NPCType* d, Spawn2* in_respawn, const glm::vec4& position, int if
 	roambox_delay = 1000;
 	p_depop = false;
 	loottable_id = d->loottable_id;
+	skip_global_loot = d->skip_global_loot;
+	rare_spawn = d->rare_spawn;
 
 	no_target_hotkey = d->no_target_hotkey;
 
@@ -374,6 +397,21 @@ NPC::NPC(const NPCType* d, Spawn2* in_respawn, const glm::vec4& position, int if
 	InitializeBuffSlots();
 	CalcBonuses();
 	raid_target = d->raid_target;
+	ignore_despawn = d->ignore_despawn;
+	m_targetable = !d->untargetable;
+
+	AISpellVar.fail_recast = RuleI(Spells, AI_SpellCastFinishedFailRecast);
+	AISpellVar.engaged_no_sp_recast_min = RuleI(Spells, AI_EngagedNoSpellMinRecast);
+	AISpellVar.engaged_no_sp_recast_max = RuleI(Spells, AI_EngagedNoSpellMaxRecast);
+	AISpellVar.engaged_beneficial_self_chance = RuleI(Spells, AI_EngagedBeneficialSelfChance);
+	AISpellVar.engaged_beneficial_other_chance = RuleI(Spells, AI_EngagedBeneficialOtherChance);
+	AISpellVar.engaged_detrimental_chance = RuleI(Spells, AI_EngagedDetrimentalChance);
+	AISpellVar.pursue_no_sp_recast_min = RuleI(Spells, AI_PursueNoSpellMinRecast);
+	AISpellVar.pursue_no_sp_recast_max = RuleI(Spells, AI_PursueNoSpellMaxRecast);
+	AISpellVar.pursue_detrimental_chance = RuleI(Spells, AI_PursueDetrimentalChance);
+	AISpellVar.idle_no_sp_recast_min = RuleI(Spells, AI_IdleNoSpellMinRecast);
+	AISpellVar.idle_no_sp_recast_max = RuleI(Spells, AI_IdleNoSpellMaxRecast);
+	AISpellVar.idle_beneficial_chance = RuleI(Spells, AI_IdleBeneficialChance);
 }
 
 NPC::~NPC()
@@ -433,6 +471,26 @@ void NPC::SetTarget(Mob* mob) {
 		ranged_timer.Disable();
 		//attack_timer.Disable();
 		attack_dw_timer.Disable();
+	}
+
+	// either normal pet and owner is client or charmed pet and owner is client
+	Mob *owner = nullptr;
+	if (IsPet() && IsPetOwnerClient()) {
+		owner = GetOwner();
+	} else if (IsCharmed()) {
+		owner = GetOwner();
+		if (owner && !owner->IsClient())
+			owner = nullptr;
+	}
+
+	if (owner) {
+		auto client = owner->CastToClient();
+		if (client->ClientVersionBit() & EQEmu::versions::bit_UFAndLater) {
+			auto app = new EQApplicationPacket(OP_PetHoTT, sizeof(ClientTarget_Struct));
+			auto ct = (ClientTarget_Struct *)app->pBuffer;
+			ct->new_target = mob ? mob->GetID() : 0;
+			client->FastQueuePacket(&app);
+		}
 	}
 	Mob::SetTarget(mob);
 }
@@ -529,11 +587,11 @@ void NPC::QueryLoot(Client* to)
 	int x = 0;
 	for (auto cur = itemlist.begin(); cur != itemlist.end(); ++cur, ++x) {
 		if (!(*cur)) {
-			Log.Out(Logs::General, Logs::Error, "NPC::QueryLoot() - ItemList error, null item");
+			Log(Logs::General, Logs::Error, "NPC::QueryLoot() - ItemList error, null item");
 			continue;
 		}
 		if (!(*cur)->item_id || !database.GetItem((*cur)->item_id)) {
-			Log.Out(Logs::General, Logs::Error, "NPC::QueryLoot() - Database error, invalid item");
+			Log(Logs::General, Logs::Error, "NPC::QueryLoot() - Database error, invalid item");
 			continue;
 		}
 
@@ -541,9 +599,7 @@ void NPC::QueryLoot(Client* to)
 		linker.SetLinkType(EQEmu::saylink::SayLinkLootItem);
 		linker.SetLootData(*cur);
 
-		auto item_link = linker.GenerateLink();
-
-		to->Message(0, "%s, ID: %u, Level: (min: %u, max: %u)", item_link.c_str(), (*cur)->item_id, (*cur)->min_level, (*cur)->max_level);
+		to->Message(0, "%s, ID: %u, Level: (min: %u, max: %u)", linker.GenerateLink().c_str(), (*cur)->item_id, (*cur)->min_level, (*cur)->max_level);
 	}
 
 	to->Message(0, "%i items on %s.", x, GetName());
@@ -587,8 +643,7 @@ void NPC::RemoveCash() {
 
 bool NPC::Process()
 {
-	if (IsStunned() && stunned_timer.Check())
-	{
+	if (IsStunned() && stunned_timer.Check()) {
 		Mob::UnStun();
 		this->spun_timer.Disable();
 	}
@@ -608,58 +663,77 @@ bool NPC::Process()
 
 	SpellProcess();
 
-	if(tic_timer.Check())
-	{
+	if (tic_timer.Check()) {
 		parse->EventNPC(EVENT_TICK, this, nullptr, "", 0);
 		BuffProcess();
 
-		if(currently_fleeing)
+		if (currently_fleeing)
 			ProcessFlee();
 
-		uint32 bonus = 0;
+		uint32 sitting_bonus = 0;
+		uint32 petbonus = 0;
+		uint32 bestregen = 0;
+		int32 dbregen = GetNPCHPRegen();
 
-		if(GetAppearance() == eaSitting)
-			bonus+=3;
+		if (GetAppearance() == eaSitting)
+			sitting_bonus += 3;
 
 		int32 OOCRegen = 0;
-		if(oocregen > 0){ //should pull from Mob class
+		if (oocregen > 0) { //should pull from Mob class
 			OOCRegen += GetMaxHP() * oocregen / 100;
-			}
-		//Lieka Edit:Fixing NPC regen.NPCs should regen to full during a set duration, not based on their HPs.Increase NPC's HPs by % of total HPs / tick.
-		if((GetHP() < GetMaxHP()) && !IsPet()) {
-			if(!IsEngaged()) {//NPC out of combat
-				if(GetNPCHPRegen() > OOCRegen)
-					SetHP(GetHP() + GetNPCHPRegen());
-				else
-					SetHP(GetHP() + OOCRegen);
-			} else
-				SetHP(GetHP()+GetNPCHPRegen());
-		} else if(GetHP() < GetMaxHP() && GetOwnerID() !=0) {
-			if(!IsEngaged()) //pet
-				SetHP(GetHP()+GetNPCHPRegen()+bonus+(GetLevel()/5));
-			else
-				SetHP(GetHP()+GetNPCHPRegen()+bonus);
-		} else
-			SetHP(GetHP()+GetNPCHPRegen());
+		}
 
-		if(GetMana() < GetMaxMana()) {
-			SetMana(GetMana()+mana_regen+bonus);
+		// Fixing NPC regen.NPCs should regen to full during 
+		// a set duration, not based on their HPs.Increase NPC's HPs by 
+		// % of total HPs / tick.
+		//
+		// If oocregen set in db, apply to pets as well.
+		// This allows the obscene #s for pets in the db to be tweaked
+		// while maintaining a decent ooc regen.
+
+		bestregen = std::max(dbregen,OOCRegen);
+
+		if ((GetHP() < GetMaxHP()) && !IsPet()) {
+			if (!IsEngaged())
+				SetHP(GetHP() + bestregen + sitting_bonus);
+			else
+				SetHP(GetHP() + dbregen);
+		}
+		else if (GetHP() < GetMaxHP() && GetOwnerID() != 0) {
+			if (!IsEngaged()) {
+				if (oocregen > 0) {
+					petbonus = std::max(OOCRegen,dbregen);
+				}
+				else {
+					petbonus = dbregen + (GetLevel() / 5);
+				}
+
+				SetHP(GetHP() + sitting_bonus + petbonus);
+			}
+			else
+				SetHP(GetHP() + dbregen);
+		}
+		else
+			SetHP(GetHP() + dbregen + sitting_bonus);
+
+		if (GetMana() < GetMaxMana()) {
+			SetMana(GetMana() + mana_regen + sitting_bonus);
 		}
 
 
-		if(zone->adv_data && !p_depop)
+		if (zone->adv_data && !p_depop)
 		{
 			ServerZoneAdventureDataReply_Struct* ds = (ServerZoneAdventureDataReply_Struct*)zone->adv_data;
-			if(ds->type == Adventure_Rescue && ds->data_id == GetNPCTypeID())
+			if (ds->type == Adventure_Rescue && ds->data_id == GetNPCTypeID())
 			{
 				Mob *o = GetOwner();
-				if(o && o->IsClient())
+				if (o && o->IsClient())
 				{
 					float x_diff = ds->dest_x - GetX();
 					float y_diff = ds->dest_y - GetY();
 					float z_diff = ds->dest_z - GetZ();
 					float dist = ((x_diff * x_diff) + (y_diff * y_diff) + (z_diff * z_diff));
-					if(dist < RuleR(Adventure, DistanceForRescueComplete))
+					if (dist < RuleR(Adventure, DistanceForRescueComplete))
 					{
 						zone->DoAdventureCountIncrease();
 						Say("You don't know what this means to me. Thank you so much for finding and saving me from"
@@ -682,7 +756,7 @@ bool NPC::Process()
 		if(viral_timer.Check()) {
 			viral_timer_counter++;
 			for(int i = 0; i < MAX_SPELL_TRIGGER*2; i+=2) {
-				if(viral_spells[i])	{
+				if(viral_spells[i] && spells[viral_spells[i]].viral_timer > 0)	{
 					if(viral_timer_counter % spells[viral_spells[i]].viral_timer == 0) {
 						SpreadVirus(viral_spells[i], viral_spells[i+1]);
 					}
@@ -692,8 +766,6 @@ bool NPC::Process()
 		if(viral_timer_counter > 999)
 			viral_timer_counter = 0;
 	}
-
-	ProjectileAttack();
 
 	if(spellbonuses.GravityEffect == 1) {
 		if(gravity_timer.Check())
@@ -706,6 +778,10 @@ bool NPC::Process()
 		reface_timer->Disable();
 	}
 
+	// needs to be done before mez and stun
+	if (ForcedMovement)
+		ProcessForcedMovement();
+
 	if (IsMezzed())
 		return true;
 
@@ -717,6 +793,11 @@ bool NPC::Process()
 
 	if (enraged_timer.Check()){
 		ProcessEnrage();
+
+		/* Don't keep running the check every second if we don't have enrage */
+		if (!GetSpecialAbility(SPECATK_ENRAGE)) {
+			enraged_timer.Disable();
+		}
 	}
 
 	//Handle assists...
@@ -877,6 +958,7 @@ bool NPC::SpawnZoneController(){
 	npc_type->d_melee_texture2 = 0;
 	npc_type->merchanttype = 0;
 	npc_type->bodytype = 11;
+	npc_type->skip_global_loot = true;
 
 	if (RuleB(Zone, EnableZoneControllerGlobals)) {
 		npc_type->qglobal = true;
@@ -1710,7 +1792,7 @@ void Mob::NPCSpecialAttacks(const char* parse, int permtag, bool reset, bool rem
 	{
 		if(database.SetSpecialAttkFlag(this->GetNPCTypeID(), orig_parse))
 		{
-			Log.Out(Logs::General, Logs::Normal, "NPCTypeID: %i flagged to '%s' for Special Attacks.\n",this->GetNPCTypeID(),orig_parse);
+			Log(Logs::General, Logs::Normal, "NPCTypeID: %i flagged to '%s' for Special Attacks.\n",this->GetNPCTypeID(),orig_parse);
 		}
 	}
 }
@@ -1884,6 +1966,7 @@ void NPC::FillSpawnStruct(NewSpawn_Struct* ns, Mob* ForWho)
 	ns->spawn.is_npc = 1;
 	UpdateActiveLight();
 	ns->spawn.light = GetActiveLightType();
+	ns->spawn.show_name = NPCTypedata->show_name;
 }
 
 void NPC::PetOnSpawn(NewSpawn_Struct* ns)
@@ -1968,7 +2051,7 @@ void NPC::ModifyNPCStat(const char *identifier, const char *newValue)
 	else if(id == "int" || id == "_int") { INT = atoi(val.c_str()); CalcMaxMana(); return; }
 	else if(id == "cha") { CHA = atoi(val.c_str()); return; }
 	else if(id == "max_hp") { base_hp = atoi(val.c_str()); CalcMaxHP(); if (cur_hp > max_hp) { cur_hp = max_hp; } return; }
-	else if(id == "max_mana") { npc_mana = atoi(val.c_str()); CalcMaxMana(); if (cur_mana > max_mana){ cur_mana = max_mana; } return; }
+	else if(id == "max_mana") { npc_mana = atoi(val.c_str()); CalcMaxMana(); if (current_mana > max_mana){ current_mana = max_mana; } return; }
 	else if(id == "mr") { MR = atoi(val.c_str()); return; }
 	else if(id == "fr") { FR = atoi(val.c_str()); return; }
 	else if(id == "cr") { CR = atoi(val.c_str()); return; }
@@ -2086,6 +2169,8 @@ void NPC::LevelScale() {
 		if(level > 15 && level <= 25)
 			scale_adjust = 2;
 
+		AC += (int)(AC * scaling);
+		ATK += (int)(ATK * scaling);
 		base_hp += (int)(base_hp * scaling);
 		max_hp += (int)(max_hp * scaling);
 		cur_hp = max_hp;
@@ -2557,6 +2642,7 @@ void NPC::ClearLastName()
 
 void NPC::DepopSwarmPets()
 {
+
 	if (GetSwarmInfo()) {
 		if (GetSwarmInfo()->duration->Check(false)){
 			Mob* owner = entity_list.GetMobID(GetSwarmInfo()->owner_id);
@@ -2591,3 +2677,42 @@ void NPC::DepopSwarmPets()
 		}
 	}
 }
+
+void NPC::ModifyStatsOnCharm(bool bRemoved)
+{
+	if (bRemoved) {
+		if (charm_ac)
+			AC = default_ac;
+		if (charm_attack_delay)
+			attack_delay = default_attack_delay;
+		if (charm_accuracy_rating)
+			accuracy_rating = default_accuracy_rating;
+		if (charm_avoidance_rating)
+			avoidance_rating = default_avoidance_rating;
+		if (charm_atk)
+			ATK = default_atk;
+		if (charm_min_dmg || charm_max_dmg) {
+			base_damage = round((default_max_dmg - default_min_dmg) / 1.9);
+			min_damage = default_min_dmg - round(base_damage / 10.0);
+		}
+	} else {
+		if (charm_ac)
+			AC = charm_ac;
+		if (charm_attack_delay)
+			attack_delay = charm_attack_delay;
+		if (charm_accuracy_rating)
+			accuracy_rating = charm_accuracy_rating;
+		if (charm_avoidance_rating)
+			avoidance_rating = charm_avoidance_rating;
+		if (charm_atk)
+			ATK = charm_atk;
+		if (charm_min_dmg || charm_max_dmg) {
+			base_damage = round((charm_max_dmg - charm_min_dmg) / 1.9);
+			min_damage = charm_min_dmg - round(base_damage / 10.0);
+		}
+	}
+	// the rest of the stats aren't cached, so lets just do these two instead of full CalcBonuses()
+	SetAttackTimer();
+	CalcAC();
+}
+

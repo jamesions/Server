@@ -69,7 +69,7 @@ uint32 ZoneDatabase::GetZoneForage(uint32 ZoneID, uint8 skill) {
 
         item[index] = atoi(row[0]);
         chance[index] = atoi(row[1]) + chancepool;
-        Log.Out(Logs::General, Logs::Error, "Possible Forage: %d with a %d chance", item[index], chance[index]);
+        Log(Logs::General, Logs::Error, "Possible Forage: %d with a %d chance", item[index], chance[index]);
         chancepool = chance[index];
     }
 
@@ -196,7 +196,7 @@ bool Client::CanFish() {
 
 		float step_size = RuleR(Watermap, FishingLineStepSize);
 
-		for(float i = 0.0f; i < len; i += step_size) {
+		for(float i = 0.0f; i < LineLength; i += step_size) {
 			glm::vec3 dest(rodPosition.x, rodPosition.y, m_Position.z - i);
 
 			bool in_lava = zone->watermap->InLava(dest);
@@ -277,20 +277,23 @@ void Client::GoFish()
 			food_id = database.GetZoneFishing(m_pp.zone_id, fishing_skill, npc_id, npc_chance);
 
 			//check for add NPC
-			if(npc_chance > 0 && npc_id) {
-				if(npc_chance < zone->random.Int(0, 99)) {
-					const NPCType* tmp = database.LoadNPCTypesData(npc_id);
-					if(tmp != nullptr) {
-                        auto positionNPC = GetPosition();
-                        positionNPC.x = positionNPC.x + 3;
-			auto npc = new NPC(tmp, nullptr, positionNPC, FlyMode3);
-			npc->AddLootTable();
+			if (npc_chance > 0 && npc_id) {
+				if (zone->random.Roll(npc_chance)) {
+					const NPCType *tmp = database.LoadNPCTypesData(npc_id);
+					if (tmp != nullptr) {
+						auto positionNPC = GetPosition();
+						positionNPC.x = positionNPC.x + 3;
+						auto npc = new NPC(tmp, nullptr, positionNPC, FlyMode3);
+						npc->AddLootTable();
+						if (npc->DropsGlobalLoot())
+							npc->CheckGlobalLootTables();
 
-			npc->AddToHateList(this, 1, 0, false); // no help yelling
+						npc->AddToHateList(this, 1, 0, false); // no help yelling
 
-			entity_list.AddNPC(npc);
+						entity_list.AddNPC(npc);
 
-			Message(MT_Emote, "You fish up a little more than you bargained for...");
+						Message(MT_Emote,
+							"You fish up a little more than you bargained for...");
 					}
 				}
 			}
@@ -405,7 +408,7 @@ void Client::ForageItem(bool guarantee) {
 		const EQEmu::ItemData* food_item = database.GetItem(foragedfood);
 
 		if(!food_item) {
-			Log.Out(Logs::General, Logs::Error, "nullptr returned from database.GetItem in ClientForageItem");
+			Log(Logs::General, Logs::Error, "nullptr returned from database.GetItem in ClientForageItem");
 			return;
 		}
 

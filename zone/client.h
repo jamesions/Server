@@ -70,6 +70,7 @@ namespace EQEmu
 #include <set>
 #include <algorithm>
 #include <memory>
+#include <deque>
 
 
 #define CLIENT_TIMEOUT 90000
@@ -198,6 +199,27 @@ struct RespawnOption
 	float heading;
 };
 
+// do not ask what all these mean because I have no idea!
+// named from the client's CEverQuest::GetInnateDesc, they're missing some
+enum eInnateSkill {
+	InnateEnabled = 0,
+	InnateAwareness = 1,
+	InnateBashDoor = 2,
+	InnateBreathFire = 3,
+	InnateHarmony = 4,
+	InnateInfravision = 6,
+	InnateLore = 8,
+	InnateNoBash = 9,
+	InnateRegen = 10,
+	InnateSlam = 11,
+	InnateSurprise = 12,
+	InnateUltraVision = 13,
+	InnateInspect = 14,
+	InnateOpen = 15,
+	InnateReveal = 16,
+	InnateSkillMax = 25, // size of array in client
+	InnateDisabled = 255
+};
 
 const uint32 POPUPID_UPDATE_SHOWSTATSWINDOW = 1000000;
 
@@ -209,7 +231,7 @@ struct ClientReward
 
 class ClientFactory {
 public:
-	Client *MakeClient(std::shared_ptr<EQStream> ieqs);
+	Client *MakeClient(std::shared_ptr<EQStreamInterface> ieqs);
 };
 
 class Client : public Mob
@@ -220,6 +242,9 @@ public:
 
 	Client(EQStreamInterface * ieqs);
 	~Client();
+
+	std::unordered_map<Mob *, float> close_mobs;
+	bool is_client_moving;
 
 	//abstract virtual function implementations required by base abstract class
 	virtual bool Death(Mob* killerMob, int32 damage, uint16 spell_id, EQEmu::skills::SkillType attack_skill);
@@ -295,6 +320,7 @@ public:
 	const char* GetBuyerWelcomeMessage() { return BuyerWelcomeMessage.c_str(); }
 
 	void FillSpawnStruct(NewSpawn_Struct* ns, Mob* ForWho);
+	bool ShouldISpawnFor(Client *c) { return !GMHideMe(c) && !IsHoveringForRespawn(); }
 	virtual bool Process();
 	void LogMerchant(Client* player, Mob* merchant, uint32 quantity, uint32 price, const EQEmu::ItemData* item, bool buying);
 	void SendPacketQueue(bool Block = true);
@@ -304,6 +330,7 @@ public:
 	void ChannelMessageSend(const char* from, const char* to, uint8 chan_num, uint8 language, const char* message, ...);
 	void ChannelMessageSend(const char* from, const char* to, uint8 chan_num, uint8 language, uint8 lang_skill, const char* message, ...);
 	void Message(uint32 type, const char* message, ...);
+	void FilteredMessage(Mob *sender, uint32 type, eqFilterType filter, const char* message, ...);
 	void QuestJournalledMessage(const char *npcname, const char* message);
 	void VoiceMacroReceived(uint32 Type, char *Target, uint32 MacroNumber);
 	void SendSound();
@@ -315,7 +342,7 @@ public:
 	bool GetRevoked() const { return revoked; }
 	void SetRevoked(bool rev) { revoked = rev; }
 	inline uint32 GetIP() const { return ip; }
-	inline bool GetHideMe() const { return gmhideme; }
+	inline bool GetHideMe() const { return gm_hide_me; }
 	void SetHideMe(bool hm);
 	inline uint16 GetPort() const { return port; }
 	bool IsDead() const { return(dead); }
@@ -348,6 +375,8 @@ public:
 	inline InspectMessage_Struct& GetInspectMessage() { return m_inspect_message; }
 	inline const InspectMessage_Struct& GetInspectMessage() const { return m_inspect_message; }
 
+	void SetPetCommandState(int button, int state);
+
 	bool CheckAccess(int16 iDBLevel, int16 iDefaultLevel);
 
 	void CheckQuests(const char* zonename, const char* message, uint32 npc_id, uint32 item_id, Mob* other);
@@ -366,7 +395,7 @@ public:
 	void SetGM(bool toggle);
 	void SetPVP(bool toggle, bool message = true);
 
-	inline bool GetPVP() const { return m_pp.pvp != 0; }
+	inline bool GetPVP(bool inc_temp = true) const { return m_pp.pvp != 0 || (inc_temp && temp_pvp); }
 	inline bool GetGM() const { return m_pp.gm != 0; }
 
 	inline void SetBaseClass(uint32 i) { m_pp.class_=i; }
@@ -397,6 +426,16 @@ public:
 	int32 CalcBaseMana();
 	const int32& SetMana(int32 amount);
 	int32 CalcManaRegenCap();
+
+	// guild pool regen shit. Sends a SpawnAppearance with a value that regens to value * 0.001
+	void EnableAreaHPRegen(int value);
+	void DisableAreaHPRegen();
+	void EnableAreaManaRegen(int value);
+	void DisableAreaManaRegen();
+	void EnableAreaEndRegen(int value);
+	void DisableAreaEndRegen();
+	void EnableAreaRegens(int value);
+	void DisableAreaRegens();
 
 	void ServerFilter(SetServerFilter_Struct* filter);
 	void BulkSendTraderInventory(uint32 char_id);
@@ -532,12 +571,12 @@ public:
 	/*Endurance and such*/
 	void CalcMaxEndurance(); //This calculates the maximum endurance we can have
 	int32 CalcBaseEndurance(); //Calculates Base End
-	int32 CalcEnduranceRegen(); //Calculates endurance regen used in DoEnduranceRegen()
-	int32 GetEndurance() const {return cur_end;} //This gets our current endurance
+	int32 CalcEnduranceRegen(bool bCombat = false); //Calculates endurance regen used in DoEnduranceRegen()
+	int32 GetEndurance() const {return current_endurance;} //This gets our current endurance
 	int32 GetMaxEndurance() const {return max_end;} //This gets our endurance from the last CalcMaxEndurance() call
 	int32 CalcEnduranceRegenCap();
 	int32 CalcHPRegenCap();
-	inline uint8 GetEndurancePercent() { return (uint8)((float)cur_end / (float)max_end * 100.0f); }
+	inline uint8 GetEndurancePercent() { return (uint8)((float)current_endurance / (float)max_end * 100.0f); }
 	void SetEndurance(int32 newEnd); //This sets the current endurance to the new value
 	void DoEnduranceRegen(); //This Regenerates endurance
 	void DoEnduranceUpkeep(); //does the endurance upkeep
@@ -564,8 +603,13 @@ public:
 	void AddCrystals(uint32 Radiant, uint32 Ebon);
 	void SendCrystalCounts();
 
+	uint32 GetExperienceForKill(Mob *against);
 	void AddEXP(uint32 in_add_exp, uint8 conlevel = 0xFF, bool resexp = false);
 	uint32 CalcEXP(uint8 conlevel = 0xFF);
+	void CalculateNormalizedAAExp(uint32 &add_aaxp, uint8 conlevel, bool resexp);
+	void CalculateStandardAAExp(uint32 &add_aaxp, uint8 conlevel, bool resexp);
+	void CalculateLeadershipExp(uint32 &add_exp, uint8 conlevel);
+	void CalculateExp(uint32 in_add_exp, uint32 &add_exp, uint32 &add_aaxp, uint8 conlevel, bool resexp);
 	void SetEXP(uint32 set_exp, uint32 set_aaxp, bool resexp=false);
 	void AddLevelBasedExp(uint8 exp_percentage, uint8 max_level=0);
 	void SetLeadershipEXP(uint32 group_exp, uint32 raid_exp);
@@ -611,6 +655,7 @@ public:
 	void Sacrifice(Client* caster);
 	void GoToDeath();
 	inline const int32 GetInstanceID() const { return zone->GetInstanceID(); }
+	void SetZoning(bool in) { bZoning = in; }
 
 	FACTION_VALUE GetReverseFactionCon(Mob* iOther);
 	FACTION_VALUE GetFactionLevel(uint32 char_id, uint32 npc_id, uint32 p_race, uint32 p_class, uint32 p_deity, int32 pFaction, Mob* tnpc);
@@ -653,7 +698,7 @@ public:
 	void RefreshGuildInfo();
 
 
-	void SendManaUpdatePacket();
+	void CheckManaEndUpdate();
 	void SendManaUpdate();
 	void SendEnduranceUpdate();
 	uint8 GetFace() const { return m_pp.face; }
@@ -710,6 +755,7 @@ public:
 	void SendTradeskillDetails(uint32 recipe_id);
 	bool TradeskillExecute(DBTradeskillRecipe_Struct *spec);
 	void CheckIncreaseTradeskill(int16 bonusstat, int16 stat_modifier, float skillup_modifier, uint16 success_modifier, EQEmu::skills::SkillType tradeskill);
+	void InitInnates();
 
 	void GMKill();
 	inline bool IsMedding() const {return medding;}
@@ -751,6 +797,9 @@ public:
 	void SummonHorse(uint16 spell_id);
 	void SetHorseId(uint16 horseid_in);
 	uint16 GetHorseId() const { return horseId; }
+	bool CanMedOnHorse();
+
+	bool CanFastRegen() const { return ooc_regen; }
 
 	void NPCSpawn(NPC *target_npc, const char *identifier, uint32 extra = 0);
 
@@ -789,12 +838,12 @@ public:
 	void AddAAPoints(uint32 points) { m_pp.aapoints += points; SendAlternateAdvancementStats(); }
 	int GetAAPoints() { return m_pp.aapoints; }
 	int GetSpentAA() { return m_pp.aapoints_spent; }
+	uint32 GetRequiredAAExperience();
 
 	//old AA methods that we still use
 	void ResetAA();
 	void RefundAA();
 	void SendClearAA();
-	inline uint32 GetMaxAAXP(void) const { return max_AAXP; }
 	inline uint32 GetAAXP() const { return m_pp.expAA; }
 	inline uint32 GetAAPercent() const { return m_epp.perAA; }
 	int16 CalcAAFocus(focusType type, const AA::Rank &rank, uint16 spell_id);
@@ -853,6 +902,7 @@ public:
 	void SetHunger(int32 in_hunger);
 	void SetThirst(int32 in_thirst);
 	void SetConsumption(int32 in_hunger, int32 in_thirst);
+	bool IsStarved() const { if (GetGM() || !RuleB(Character, EnableHungerPenalties)) return false; return m_pp.hunger_level == 0 || m_pp.thirst_level == 0; }
 
 	bool CheckTradeLoreConflict(Client* other);
 	bool CheckTradeNonDroppable();
@@ -939,6 +989,7 @@ public:
 	inline bool HasSpellScribed(int spellid) { return (FindSpellBookSlotBySpellID(spellid) != -1 ? true : false); }
 	uint16 GetMaxSkillAfterSpecializationRules(EQEmu::skills::SkillType skillid, uint16 maxSkill);
 	void SendPopupToClient(const char *Title, const char *Text, uint32 PopupID = 0, uint32 Buttons = 0, uint32 Duration = 0);
+	void SendFullPopup(const char *Title, const char *Text, uint32 PopupID = 0, uint32 NegativeID = 0, uint32 Buttons = 0, uint32 Duration = 0, const char *ButtonName0 = 0, const char *ButtonName1 = 0, uint32 SoundControls = 0);
 	void SendWindow(uint32 PopupID, uint32 NegativeID, uint32 Buttons, const char *ButtonName0, const char *ButtonName1, uint32 Duration, int title_type, Client* target, const char *Title, const char *Text, ...);
 	bool PendingTranslocate;
 	time_t TranslocateTime;
@@ -1063,7 +1114,7 @@ public:
 	void Signal(uint32 data);
 	Mob *GetBindSightTarget() { return bind_sight_target; }
 	void SetBindSightTarget(Mob *n) { bind_sight_target = n; }
-	const uint16 GetBoatID() const { return BoatID; }
+	const uint16 GetBoatID() const { return controlling_boat_id; }
 	void SendRewards();
 	bool TryReward(uint32 claim_id);
 	QGlobalCache *GetQGlobals() { return qGlobals; }
@@ -1254,6 +1305,10 @@ public:
 
 	void CheckRegionTypeChanges();
 
+	int32 CalcATK();
+
+	uint32 trapid; //ID of trap player has triggered. This is cleared when the player leaves the trap's radius, or it despawns.
+
 protected:
 	friend class Mob;
 	void CalcItemBonuses(StatBonuses* newbon);
@@ -1313,7 +1368,6 @@ private:
 
 	void HandleTraderPriceUpdate(const EQApplicationPacket *app);
 
-	int32 CalcATK();
 	int32 CalcItemATKCap();
 	int32 CalcHaste();
 
@@ -1334,13 +1388,13 @@ private:
 	int32 CalcCorrup();
 	int32 CalcMaxHP();
 	int32 CalcBaseHP();
-	int32 CalcHPRegen();
-	int32 CalcManaRegen();
+	int32 CalcHPRegen(bool bCombat = false);
+	int32 CalcManaRegen(bool bCombat = false);
 	int32 CalcBaseManaRegen();
 	uint32 GetClassHPFactor();
 	void DoHPRegen();
 	void DoManaRegen();
-	void DoStaminaUpdate();
+	void DoStaminaHungerUpdate();
 	void CalcRestState();
 
 	uint32 pLastUpdate;
@@ -1366,7 +1420,7 @@ private:
 	bool duelaccepted;
 	std::list<uint32> keyring;
 	bool tellsoff; // GM /toggle
-	bool gmhideme;
+	bool gm_hide_me;
 	bool LFG;
 	bool LFP;
 	uint8 LFGFromLevel;
@@ -1386,7 +1440,7 @@ private:
 	uint32 weight;
 	bool berserk;
 	bool dead;
-	uint16 BoatID;
+	uint16 controlling_boat_id;
 	uint16 TrackingID;
 	uint16 CustomerID;
 	uint16 TraderID;
@@ -1399,9 +1453,10 @@ private:
 	std::string BuyerWelcomeMessage;
 	bool AbilityTimer;
 	int Haste; //precalced value
+	uint32 tmSitting; // time stamp started sitting, used for HP regen bonus added on MAY 5, 2004
 
 	int32 max_end;
-	int32 cur_end;
+	int32 current_endurance;
 
 	PlayerProfile_Struct m_pp;
 	ExtendedProfile_Struct m_epp;
@@ -1411,6 +1466,7 @@ private:
 	PetInfo m_suspendedminion; // pet data for our suspended minion.
 	MercInfo m_mercinfo[MAXMERCS]; // current mercenary
 	InspectMessage_Struct m_inspect_message;
+	bool temp_pvp;
 
 	void NPCSpawn(const Seperator* sep);
 	uint32 GetEXPForLevel(uint16 level);
@@ -1421,7 +1477,7 @@ private:
 	bool AddPacket(const EQApplicationPacket *, bool);
 	bool AddPacket(EQApplicationPacket**, bool);
 	bool SendAllPackets();
-	LinkedList<CLIENTPACKET *> clientpackets;
+	std::deque<std::unique_ptr<CLIENTPACKET>> clientpackets;
 
 	//Zoning related stuff
 	void SendZoneCancel(ZoneChange_Struct *zc);
@@ -1447,7 +1503,7 @@ private:
 	Timer hpupdate_timer;
 	Timer camp_timer;
 	Timer process_timer;
-	Timer stamina_timer;
+	Timer consume_food_timer;
 	Timer zoneinpacket_timer;
 	Timer linkdead_timer;
 	Timer dead_timer;
@@ -1457,9 +1513,7 @@ private:
 	Timer endupkeep_timer;
 	Timer forget_timer; // our 2 min everybody forgets you timer
 	Timer autosave_timer;
-#ifdef REVERSE_AGGRO
-	Timer scanarea_timer;
-#endif
+	Timer client_scan_npc_aggro_timer;
 	Timer tribute_timer;
 
 	Timer proximity_timer;
@@ -1475,10 +1529,14 @@ private:
 	Timer anon_toggle_timer;
 	Timer afk_toggle_timer;
 	Timer helm_toggle_timer;
-	Timer light_update_timer;
 	Timer aggro_meter_timer;
+	Timer npc_close_scan_timer;
+	Timer hp_self_update_throttle_timer; /* This is to prevent excessive packet sending under trains/fast combat */
+	Timer hp_other_update_throttle_timer; /* This is to keep clients from DOSing the server with macros that change client targets constantly */
+	Timer position_update_timer; /* Timer used when client hasn't updated within a 10 second window */
 
-    glm::vec3 m_Proximity;
+	glm::vec3 m_Proximity;
+	glm::vec4 last_major_update_position;
 
 	void BulkSendInventoryItems();
 
@@ -1486,21 +1544,24 @@ private:
 
 	uint32 tribute_master_id;
 
-	uint32 max_AAXP;
 	bool npcflag;
 	uint8 npclevel;
 	bool feigned;
-	bool zoning;
+	bool bZoning;
 	bool tgb;
 	bool instalog;
 	int32 last_reported_mana;
-	int32 last_reported_endur;
+	int32 last_reported_endurance;
+
+	int8 last_reported_mana_percent;
+	int8 last_reported_endurance_percent;
 
 	unsigned int AggroCount; // How many mobs are aggro on us.
 
-	unsigned int RestRegenHP;
-	unsigned int RestRegenMana;
-	unsigned int RestRegenEndurance;
+	bool ooc_regen;
+	float AreaHPRegen;
+	float AreaManaRegen;
+	float AreaEndRegen;
 
 	bool EngagedRaidTarget;
 	uint32 SavedRaidRestTimer;

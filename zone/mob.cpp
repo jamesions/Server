@@ -18,6 +18,7 @@
 
 #include "../common/spdat.h"
 #include "../common/string_util.h"
+#include "../common/misc_functions.h"
 
 #include "quest_parser_collection.h"
 #include "string_ids.h"
@@ -74,7 +75,6 @@ Mob::Mob(const char* in_name,
 		uint32		in_drakkin_tattoo,
 		uint32		in_drakkin_details,
 		EQEmu::TintProfile	in_armor_tint,
-
 		uint8		in_aa_title,
 		uint8		in_see_invis, // see through invis/ivu
 		uint8		in_see_invis_undead,
@@ -90,68 +90,75 @@ Mob::Mob(const char* in_name,
 		uint8		in_handtexture,
 		uint8		in_legtexture,
 		uint8		in_feettexture
-		) :
+	) :
 		attack_timer(2000),
 		attack_dw_timer(2000),
 		ranged_timer(2000),
 		tic_timer(6000),
 		mana_timer(2000),
 		spellend_timer(0),
-		rewind_timer(30000), //Timer used for determining amount of time between actual player position updates for /rewind.
+		rewind_timer(30000),
 		bindwound_timer(10000),
 		stunned_timer(0),
 		spun_timer(0),
 		bardsong_timer(6000),
 		gravity_timer(1000),
 		viral_timer(0),
-		m_FearWalkTarget(-999999.0f,-999999.0f,-999999.0f),
+		m_FearWalkTarget(-999999.0f, -999999.0f, -999999.0f),
 		m_TargetLocation(glm::vec3()),
 		m_TargetV(glm::vec3()),
-		flee_timer(FLEE_CHECK_TIMER),
+		flee_timer(FLEE_CHECK_TIMER), 
 		m_Position(position),
 		tmHidden(-1),
 		mitigation_ac(0),
-		m_specialattacks(eSpecialAttacks::None)
+		m_specialattacks(eSpecialAttacks::None),
+		fix_z_timer(300),
+		fix_z_timer_engaged(100),
+		attack_anim_timer(1000),
+		position_update_melee_push_timer(500),
+		mHateListCleanup(6000)
 {
 	targeted = 0;
-	tar_ndx=0;
-	tar_vector=0;
+	tar_ndx = 0;
+	tar_vector = 0;
 	currently_fleeing = false;
+
+	last_major_update_position = m_Position;
+	is_distance_roamer = false;
 
 	AI_Init();
 	SetMoving(false);
-	moved=false;
+	moved = false;
 	m_RewindLocation = glm::vec3();
-	move_tic_count = 0;
 
 	_egnode = nullptr;
-	name[0]=0;
-	orig_name[0]=0;
-	clean_name[0]=0;
-	lastname[0]=0;
-	if(in_name) {
-		strn0cpy(name,in_name,64);
-		strn0cpy(orig_name,in_name,64);
+	name[0] = 0;
+	orig_name[0] = 0;
+	clean_name[0] = 0;
+	lastname[0] = 0;
+	if (in_name) {
+		strn0cpy(name, in_name, 64);
+		strn0cpy(orig_name, in_name, 64);
 	}
-	if(in_lastname)
-		strn0cpy(lastname,in_lastname,64);
-	cur_hp		= in_cur_hp;
-	max_hp		= in_max_hp;
-	base_hp		= in_max_hp;
-	gender		= in_gender;
-	race		= in_race;
-	base_gender	= in_gender;
-	base_race	= in_race;
-	class_		= in_class;
-	bodytype	= in_bodytype;
+	if (in_lastname)
+		strn0cpy(lastname, in_lastname, 64);
+	cur_hp = in_cur_hp;
+	max_hp = in_max_hp;
+	base_hp = in_max_hp;
+	gender = in_gender;
+	race = in_race;
+	base_gender = in_gender;
+	base_race = in_race;
+	class_ = in_class;
+	bodytype = in_bodytype;
 	orig_bodytype = in_bodytype;
-	deity		= in_deity;
-	level		= in_level;
+	deity = in_deity;
+	level = in_level;
 	orig_level = in_level;
-	npctype_id	= in_npctype_id;
-	size		= in_size;
-	base_size	= size;
-	runspeed	= in_runspeed;
+	npctype_id = in_npctype_id;
+	size = in_size;
+	base_size = size;
+	runspeed = in_runspeed;
 	// neotokyo: sanity check
 	if (runspeed < 0 || runspeed > 20)
 		runspeed = 1.25f;
@@ -164,17 +171,20 @@ Mob::Mob(const char* in_name,
 		fearspeed = 0.625f;
 		base_fearspeed = 25;
 		// npcs
-	} else {
+	}
+	else {
 		base_walkspeed = base_runspeed * 100 / 265;
 		walkspeed = ((float)base_walkspeed) * 0.025f;
 		base_fearspeed = base_runspeed * 100 / 127;
 		fearspeed = ((float)base_fearspeed) * 0.025f;
 	}
 
+	last_hp_percent = 0;
+	last_hp = 0;
 
 	current_speed = base_runspeed;
 
-	m_PlayerState	= 0;
+	m_PlayerState = 0;
 
 
 	// sanity check
@@ -186,8 +196,8 @@ Mob::Mob(const char* in_name,
 	m_Light.Type[EQEmu::lightsource::LightActive] = m_Light.Type[EQEmu::lightsource::LightInnate];
 	m_Light.Level[EQEmu::lightsource::LightActive] = m_Light.Level[EQEmu::lightsource::LightInnate];
 
-	texture		= in_texture;
-	helmtexture	= in_helmtexture;
+	texture = in_texture;
+	helmtexture = in_helmtexture;
 	armtexture = in_armtexture;
 	bracertexture = in_bracertexture;
 	handtexture = in_handtexture;
@@ -195,21 +205,21 @@ Mob::Mob(const char* in_name,
 	feettexture = in_feettexture;
 	multitexture = (armtexture || bracertexture || handtexture || legtexture || feettexture);
 
-	haircolor	= in_haircolor;
-	beardcolor	= in_beardcolor;
-	eyecolor1	= in_eyecolor1;
-	eyecolor2	= in_eyecolor2;
-	hairstyle	= in_hairstyle;
-	luclinface	= in_luclinface;
-	beard		= in_beard;
-	drakkin_heritage	= in_drakkin_heritage;
-	drakkin_tattoo		= in_drakkin_tattoo;
-	drakkin_details		= in_drakkin_details;
+	haircolor = in_haircolor;
+	beardcolor = in_beardcolor;
+	eyecolor1 = in_eyecolor1;
+	eyecolor2 = in_eyecolor2;
+	hairstyle = in_hairstyle;
+	luclinface = in_luclinface;
+	beard = in_beard;
+	drakkin_heritage = in_drakkin_heritage;
+	drakkin_tattoo = in_drakkin_tattoo;
+	drakkin_details = in_drakkin_details;
 	attack_speed = 0;
 	attack_delay = 0;
 	slow_mitigation = 0;
-	findable	= false;
-	trackable	= true;
+	findable = false;
+	trackable = true;
 	has_shieldequiped = false;
 	has_twohandbluntequiped = false;
 	has_twohanderequipped = false;
@@ -220,26 +230,26 @@ Mob::Mob(const char* in_name,
 	SpellPowerDistanceMod = 0;
 	last_los_check = false;
 
-	if(in_aa_title>0)
-		aa_title	= in_aa_title;
+	if (in_aa_title > 0)
+		aa_title = in_aa_title;
 	else
-		aa_title	=0xFF;
-	AC		= in_ac;
-	ATK		= in_atk;
-	STR		= in_str;
-	STA		= in_sta;
-	DEX		= in_dex;
-	AGI		= in_agi;
-	INT		= in_int;
-	WIS		= in_wis;
-	CHA		= in_cha;
+		aa_title = 0xFF;
+	AC = in_ac;
+	ATK = in_atk;
+	STR = in_str;
+	STA = in_sta;
+	DEX = in_dex;
+	AGI = in_agi;
+	INT = in_int;
+	WIS = in_wis;
+	CHA = in_cha;
 	MR = CR = FR = DR = PR = Corrup = 0;
 
 	ExtraHaste = 0;
 	bEnraged = false;
 
 	shield_target = nullptr;
-	cur_mana = 0;
+	current_mana = 0;
 	max_mana = 0;
 	hp_regen = in_hp_regen;
 	mana_regen = in_mana_regen;
@@ -253,9 +263,10 @@ Mob::Mob(const char* in_name,
 	hidden = false;
 	improved_hidden = false;
 	invulnerable = false;
-	IsFullHP	= (cur_hp == max_hp);
-	qglobal=0;
+	IsFullHP = (cur_hp == max_hp);
+	qglobal = 0;
 	spawned = false;
+	rare_spawn = false;
 
 	InitializeBuffSlots();
 
@@ -295,7 +306,7 @@ Mob::Mob(const char* in_name,
 	logging_enabled = false;
 	isgrouped = false;
 	israidgrouped = false;
-	
+
 	IsHorse = false;
 
 	entity_id_being_looted = 0;
@@ -343,8 +354,11 @@ Mob::Mob(const char* in_name,
 	typeofpet = petNone; // default to not a pet
 	petpower = 0;
 	held = false;
+	gheld = false;
 	nocast = false;
 	focused = false;
+	pet_stop = false;
+	pet_regroup = false;
 	_IsTempPet = false;
 	pet_owner_client = false;
 	pet_targetlock_id = 0;
@@ -363,13 +377,13 @@ Mob::Mob(const char* in_name,
 	}
 
 	destructibleobject = false;
-	wandertype=0;
-	pausetype=0;
+	wandertype = 0;
+	pausetype = 0;
 	cur_wp = 0;
 	m_CurrentWayPoint = glm::vec4();
 	cur_wp_pause = 0;
-	patrol=0;
-	follow=0;
+	patrol = 0;
+	follow = 0;
 	follow_dist = 100;	// Default Distance for Follow
 	no_target_hotkey = false;
 	flee_mode = false;
@@ -379,11 +393,12 @@ Mob::Mob(const char* in_name,
 	permarooted = (runspeed > 0) ? false : true;
 
 	movetimercompleted = false;
+	ForcedMovement = 0;
 	roamer = false;
 	rooted = false;
 	charmed = false;
 	has_virus = false;
-	for (i=0; i<MAX_SPELL_TRIGGER*2; i++) {
+	for (i = 0; i < MAX_SPELL_TRIGGER * 2; i++) {
 		viral_spells[i] = 0;
 	}
 	pStandingPetOrder = SPO_Follow;
@@ -414,7 +429,7 @@ Mob::Mob(const char* in_name,
 	nimbus_effect3 = 0;
 	m_targetable = true;
 
-    m_TargetRing = glm::vec3();
+	m_TargetRing = glm::vec3();
 
 	flymode = FlyMode3;
 	// Pathing
@@ -431,7 +446,7 @@ Mob::Mob(const char* in_name,
 	m_AllowBeneficial = false;
 	m_DisableMelee = false;
 	for (int i = 0; i < EQEmu::skills::HIGHEST_SKILL + 2; i++) { SkillDmgTaken_Mod[i] = 0; }
-	for (int i = 0; i < HIGHEST_RESIST+2; i++) { Vulnerability_Mod[i] = 0; }
+	for (int i = 0; i < HIGHEST_RESIST + 2; i++) { Vulnerability_Mod[i] = 0; }
 
 	emoteid = 0;
 	endur_upkeep = false;
@@ -1095,7 +1110,7 @@ void Mob::FillSpawnStruct(NewSpawn_Struct* ns, Mob* ForWho)
 		strn0cpy(ns->spawn.lastName, lastname, sizeof(ns->spawn.lastName));
 	}
 
-	ns->spawn.heading	= FloatToEQ19(m_Position.w);
+	ns->spawn.heading	= FloatToEQ12(m_Position.w);
 	ns->spawn.x			= FloatToEQ19(m_Position.x);//((int32)x_pos)<<3;
 	ns->spawn.y			= FloatToEQ19(m_Position.y);//((int32)y_pos)<<3;
 	ns->spawn.z			= FloatToEQ19(m_Position.z);//((int32)z_pos)<<3;
@@ -1289,197 +1304,255 @@ void Mob::CreateHPPacket(EQApplicationPacket* app)
 }
 
 // sends hp update of this mob to people who might care
-void Mob::SendHPUpdate(bool skip_self)
+void Mob::SendHPUpdate(bool skip_self /*= false*/, bool force_update_all /*= false*/)
 {
-	EQApplicationPacket hp_app;
-	Group *group = nullptr;
+	
+	/* If our HP is different from last HP update call - let's update ourself */
+	if (IsClient()) {
+		if (cur_hp != last_hp || force_update_all) {
+			/* This is to prevent excessive packet sending under trains/fast combat */
+			if (this->CastToClient()->hp_self_update_throttle_timer.Check() || force_update_all) {
+				Log(Logs::General, Logs::HP_Update,
+					"Mob::SendHPUpdate :: Update HP of self (%s) HP: %i last: %i skip_self: %s",
+					this->GetCleanName(),
+					cur_hp,
+					last_hp,
+					(skip_self ? "true" : "false")
+				);
 
-	// destructor will free the pBuffer
-	CreateHPPacket(&hp_app);
+				if (!skip_self || this->CastToClient()->ClientVersion() >= EQEmu::versions::ClientVersion::SoD) {
+					auto client_packet = new EQApplicationPacket(OP_HPUpdate, sizeof(SpawnHPUpdate_Struct));
+					SpawnHPUpdate_Struct* hp_packet_client = (SpawnHPUpdate_Struct*)client_packet->pBuffer;
 
-	// send to people who have us targeted
-	entity_list.QueueClientsByTarget(this, &hp_app, false, 0, false, true, EQEmu::versions::bit_AllClients);
-	entity_list.QueueClientsByXTarget(this, &hp_app, false);
-	entity_list.QueueToGroupsForNPCHealthAA(this, &hp_app);
+					hp_packet_client->cur_hp = CastToClient()->GetHP() - itembonuses.HP;
+					hp_packet_client->spawn_id = GetID();
+					hp_packet_client->max_hp = CastToClient()->GetMaxHP() - itembonuses.HP;
 
-	// send to group
-	if(IsGrouped())
-	{
-		group = entity_list.GetGroupByMob(this);
-		if(group) //not sure why this might be null, but it happens
-			group->SendHPPacketsFrom(this);
-	}
+					CastToClient()->QueuePacket(client_packet);
 
-	if(IsClient()){
-		Raid *r = entity_list.GetRaidByClient(CastToClient());
-		if(r){
-			r->SendHPPacketsFrom(this);
-		}
-	}
+					safe_delete(client_packet);
 
-	// send to master
-	if(GetOwner() && GetOwner()->IsClient())
-	{
-		GetOwner()->CastToClient()->QueuePacket(&hp_app, false);
-		group = entity_list.GetGroupByClient(GetOwner()->CastToClient());
-		if(group)
-			group->SendHPPacketsFrom(this);
-		Raid *r = entity_list.GetRaidByClient(GetOwner()->CastToClient());
-		if(r)
-			r->SendHPPacketsFrom(this);
-	}
+					ResetHPUpdateTimer();
+				}
 
-	// send to pet
-	if(GetPet() && GetPet()->IsClient())
-	{
-		GetPet()->CastToClient()->QueuePacket(&hp_app, false);
-	}
-
-	// Update the damage state of destructible objects
-	if(IsNPC() && IsDestructibleObject())
-	{
-		if (GetHPRatio() > 74)
-		{
-			if (GetAppearance() != eaStanding)
-			{
-					SendAppearancePacket(AT_DamageState, eaStanding);
-					_appearance = eaStanding;
+				/* Used to check if HP has changed to update self next round */
+				last_hp = cur_hp;
 			}
 		}
-		else if (GetHPRatio() > 49)
-		{
-			if (GetAppearance() != eaSitting)
-			{
+	}
+
+	int8 current_hp_percent = (max_hp == 0 ? 0 : static_cast<int>(cur_hp * 100 / max_hp));
+
+	Log(Logs::General, Logs::HP_Update, "Mob::SendHPUpdate :: SendHPUpdate %s HP is %i last %i", this->GetCleanName(), current_hp_percent, last_hp_percent);
+
+	if (current_hp_percent == last_hp_percent && !force_update_all) {
+		Log(Logs::General, Logs::HP_Update, "Mob::SendHPUpdate :: Same HP - skipping update");
+		ResetHPUpdateTimer();
+		return;
+	}
+	else {
+
+		if (IsClient() && RuleB(Character, MarqueeHPUpdates))
+			this->CastToClient()->SendHPUpdateMarquee();
+
+		Log(Logs::General, Logs::HP_Update, "Mob::SendHPUpdate :: HP Changed - Send update");
+
+		last_hp_percent = current_hp_percent;
+	}
+
+	EQApplicationPacket hp_packet;
+	Group *group = nullptr;
+
+	CreateHPPacket(&hp_packet);
+
+	/* Update those who have us targeted */
+	entity_list.QueueClientsByTarget(this, &hp_packet, false, 0, false, true, EQEmu::versions::bit_AllClients);
+
+	/* Update those who have us on x-target */
+	entity_list.QueueClientsByXTarget(this, &hp_packet, false);
+
+	/* Update groups using Group LAA health name tag counter */
+	entity_list.QueueToGroupsForNPCHealthAA(this, &hp_packet);
+
+	/* Update group */
+	if(IsGrouped()) {
+		group = entity_list.GetGroupByMob(this);
+		if(group)
+			group->SendHPPacketsFrom(this);
+	}
+
+	/* Update Raid */
+	if(IsClient()){
+		Raid *raid = entity_list.GetRaidByClient(CastToClient());
+		if (raid)
+			raid->SendHPManaEndPacketsFrom(this);
+	}
+
+	/* Pet - Update master - group and raid if exists */
+	if(GetOwner() && GetOwner()->IsClient()) {
+		GetOwner()->CastToClient()->QueuePacket(&hp_packet, false);
+		group = entity_list.GetGroupByClient(GetOwner()->CastToClient());
+
+		if(group)
+			group->SendHPPacketsFrom(this);
+
+		Raid *raid = entity_list.GetRaidByClient(GetOwner()->CastToClient());
+		if(raid)
+			raid->SendHPManaEndPacketsFrom(this);
+	}
+
+	/* Send to pet */
+	if(GetPet() && GetPet()->IsClient()) {
+		GetPet()->CastToClient()->QueuePacket(&hp_packet, false);
+	}
+
+	/* Destructible objects */
+	if (IsNPC() && IsDestructibleObject()) {
+		if (GetHPRatio() > 74) {
+			if (GetAppearance() != eaStanding) {
+				SendAppearancePacket(AT_DamageState, eaStanding);
+				_appearance = eaStanding;
+			}
+		}
+		else if (GetHPRatio() > 49) {
+			if (GetAppearance() != eaSitting) {
 				SendAppearancePacket(AT_DamageState, eaSitting);
 				_appearance = eaSitting;
 			}
 		}
-		else if (GetHPRatio() > 24)
-		{
-			if (GetAppearance() != eaCrouching)
-			{
+		else if (GetHPRatio() > 24) {
+			if (GetAppearance() != eaCrouching) {
 				SendAppearancePacket(AT_DamageState, eaCrouching);
 				_appearance = eaCrouching;
 			}
 		}
-		else if (GetHPRatio() > 0)
-		{
-			if (GetAppearance() != eaDead)
-			{
+		else if (GetHPRatio() > 0) {
+			if (GetAppearance() != eaDead) {
 				SendAppearancePacket(AT_DamageState, eaDead);
 				_appearance = eaDead;
 			}
 		}
-		else if (GetAppearance() != eaLooting)
-		{
+		else if (GetAppearance() != eaLooting) {
 			SendAppearancePacket(AT_DamageState, eaLooting);
 			_appearance = eaLooting;
 		}
 	}
-
-	bool dospam = RuleB(Character, SpamHPUpdates);
-	// send to self - we need the actual hps here
-	if(IsClient() && (!skip_self || dospam)) {
-
-		this->CastToClient()->SendHPUpdateMarquee();
-
-		auto hp_app2 = new EQApplicationPacket(OP_HPUpdate, sizeof(SpawnHPUpdate_Struct));
-		SpawnHPUpdate_Struct* ds = (SpawnHPUpdate_Struct*)hp_app2->pBuffer;
-		ds->cur_hp = CastToClient()->GetHP() - itembonuses.HP;
-		ds->spawn_id = GetID();
-		ds->max_hp = CastToClient()->GetMaxHP() - itembonuses.HP;
-		CastToClient()->QueuePacket(hp_app2);
-		safe_delete(hp_app2);
-	}
-	if (!dospam)
-		ResetHPUpdateTimer(); // delay the timer
 }
 
-// this one just warps the mob to the current location
-void Mob::SendPosition()
-{
+void Mob::StopMoving() {
+	FixZ();
+	SetCurrentSpeed(0);
+	if (moved)
+		moved = false;
+}
+
+void Mob::StopMoving(float new_heading) {
+	SetHeading(new_heading);
+	FixZ();
+	SetCurrentSpeed(0);
+	if (moved)
+		moved = false;
+}
+
+/* Used for mobs standing still - this does not send a delta */
+void Mob::SendPosition() {
 	auto app = new EQApplicationPacket(OP_ClientUpdate, sizeof(PlayerPositionUpdateServer_Struct));
 	PlayerPositionUpdateServer_Struct* spu = (PlayerPositionUpdateServer_Struct*)app->pBuffer;
 	MakeSpawnUpdateNoDelta(spu);
-	move_tic_count = 0;
-	entity_list.QueueClients(this, app, true);
+
+	/* When an NPC has made a large distance change - we should update all clients to prevent "ghosts" */
+	if (DistanceSquared(last_major_update_position, m_Position) >= (100 * 100)) {
+		entity_list.QueueClients(this, app, true, true);
+		last_major_update_position = m_Position;
+		is_distance_roamer = true;
+	}
+	else {
+		entity_list.QueueCloseClients(this, app, true, RuleI(Range, MobPositionUpdates), nullptr, false);
+	}
+
 	safe_delete(app);
 }
 
-// this one is for mobs on the move, with deltas - this makes them walk
-void Mob::SendPosUpdate(uint8 iSendToSelf) {
+void Mob::SendPositionUpdateToClient(Client *client) {
+	auto app = new EQApplicationPacket(OP_ClientUpdate, sizeof(PlayerPositionUpdateServer_Struct));
+	PlayerPositionUpdateServer_Struct* spawn_update = (PlayerPositionUpdateServer_Struct*)app->pBuffer;
+
+	if(this->IsMoving())
+		MakeSpawnUpdate(spawn_update);
+	else
+		MakeSpawnUpdateNoDelta(spawn_update);
+
+	client->QueuePacket(app, false);
+
+	safe_delete(app);
+}
+
+/* Position updates for mobs on the move */
+void Mob::SendPositionUpdate(uint8 iSendToSelf) {
 	auto app = new EQApplicationPacket(OP_ClientUpdate, sizeof(PlayerPositionUpdateServer_Struct));
 	PlayerPositionUpdateServer_Struct* spu = (PlayerPositionUpdateServer_Struct*)app->pBuffer;
 	MakeSpawnUpdate(spu);
 
 	if (iSendToSelf == 2) {
 		if (IsClient()) {
-			CastToClient()->FastQueuePacket(&app,false);
+			CastToClient()->FastQueuePacket(&app, false);
 		}
 	}
-	else
-	{
-		if(move_tic_count == RuleI(Zone, NPCPositonUpdateTicCount))
-		{
-			entity_list.QueueClients(this, app, (iSendToSelf == 0), false);
-			move_tic_count = 0;
-		}
-		else if(move_tic_count % 2 == 0)
-		{
-			entity_list.QueueCloseClients(this, app, (iSendToSelf == 0), RuleI(Range, MobPositionUpdates), nullptr, false);
-			move_tic_count++;
-		} 
-		else {
-			move_tic_count++;
-		}
+	else if (DistanceSquared(last_major_update_position, m_Position) >= (100 * 100)) {
+		entity_list.QueueClients(this, app, true, true);
+		last_major_update_position = m_Position;
+		is_distance_roamer = true;
+	}
+	else {
+		entity_list.QueueCloseClients(this, app, (iSendToSelf == 0), RuleI(Range, MobPositionUpdates), nullptr, false);
 	}
 	safe_delete(app);
 }
 
 // this is for SendPosition()
-void Mob::MakeSpawnUpdateNoDelta(PlayerPositionUpdateServer_Struct *spu){
-	memset(spu,0xff,sizeof(PlayerPositionUpdateServer_Struct));
-	spu->spawn_id	= GetID();
-	spu->x_pos		= FloatToEQ19(m_Position.x);
-	spu->y_pos		= FloatToEQ19(m_Position.y);
-	spu->z_pos		= FloatToEQ19(m_Position.z);
-	spu->delta_x	= NewFloatToEQ13(0);
-	spu->delta_y	= NewFloatToEQ13(0);
-	spu->delta_z	= NewFloatToEQ13(0);
-	spu->heading	= FloatToEQ19(m_Position.w);
-	spu->animation	= 0;
-	spu->delta_heading = NewFloatToEQ13(0);
-	spu->padding0002	=0;
-	spu->padding0006	=7;
-	spu->padding0014	=0x7f;
-	spu->padding0018	=0x5df27;
+void Mob::MakeSpawnUpdateNoDelta(PlayerPositionUpdateServer_Struct *spu) {
+	memset(spu, 0xff, sizeof(PlayerPositionUpdateServer_Struct));
+	spu->spawn_id = GetID();
+	spu->x_pos = FloatToEQ19(m_Position.x);
+	spu->y_pos = FloatToEQ19(m_Position.y);
+	spu->z_pos = FloatToEQ19(m_Position.z);
+	spu->delta_x = FloatToEQ13(0);
+	spu->delta_y = FloatToEQ13(0);
+	spu->delta_z = FloatToEQ13(0);
+	spu->heading = FloatToEQ12(m_Position.w);
+	spu->animation = 0;
+	spu->delta_heading = FloatToEQ10(0);
+	spu->padding0002 = 0;
+	spu->padding0006 = 7;
+	spu->padding0014 = 0x7f;
+	spu->padding0018 = 0x5df27;
 
 }
 
 // this is for SendPosUpdate()
 void Mob::MakeSpawnUpdate(PlayerPositionUpdateServer_Struct* spu) {
-	spu->spawn_id	= GetID();
-	spu->x_pos		= FloatToEQ19(m_Position.x);
-	spu->y_pos		= FloatToEQ19(m_Position.y);
-	spu->z_pos		= FloatToEQ19(m_Position.z);
-	spu->delta_x	= NewFloatToEQ13(m_Delta.x);
-	spu->delta_y	= NewFloatToEQ13(m_Delta.y);
-	spu->delta_z	= NewFloatToEQ13(m_Delta.z);
-	spu->heading	= FloatToEQ19(m_Position.w);
-	spu->padding0002	=0;
-	spu->padding0006	=7;
-	spu->padding0014	=0x7f;
-	spu->padding0018	=0x5df27;
+	spu->spawn_id = GetID();
+	spu->x_pos = FloatToEQ19(m_Position.x);
+	spu->y_pos = FloatToEQ19(m_Position.y);
+	spu->z_pos = FloatToEQ19(m_Position.z);
+	spu->delta_x = FloatToEQ13(m_Delta.x);
+	spu->delta_y = FloatToEQ13(m_Delta.y);
+	spu->delta_z = FloatToEQ13(m_Delta.z);
+	spu->heading = FloatToEQ12(m_Position.w);
+	spu->padding0002 = 0;
+	spu->padding0006 = 7;
+	spu->padding0014 = 0x7f;
+	spu->padding0018 = 0x5df27;
 #ifdef BOTS
 	if (this->IsClient() || this->IsBot())
 #else
-	if(this->IsClient())
+	if (this->IsClient())
 #endif
 		spu->animation = animation;
 	else
 		spu->animation = pRunAnimSpeed;//animation;
-	
-	spu->delta_heading = NewFloatToEQ13(m_Delta.w);
+
+	spu->delta_heading = FloatToEQ10(m_Delta.w);
 }
 
 void Mob::ShowStats(Client* client)
@@ -1526,6 +1599,9 @@ void Mob::ShowStats(Client* client)
 }
 
 void Mob::DoAnim(const int animnum, int type, bool ackreq, eqFilterType filter) {
+	if (!attack_anim_timer.Check())
+		return;
+
 	auto outapp = new EQApplicationPacket(OP_Animation, sizeof(Animation_Struct));
 	Animation_Struct* anim = (Animation_Struct*)outapp->pBuffer;
 	anim->spawnid = GetID();
@@ -1799,7 +1875,7 @@ void Mob::SendIllusionPacket(uint16 in_race, uint8 in_gender, uint8 in_texture, 
 	/* Refresh armor and tints after send illusion packet */
 	this->SendArmorAppearance();
 
-	Log.Out(Logs::Detail, Logs::Spells, "Illusion: Race = %i, Gender = %i, Texture = %i, HelmTexture = %i, HairColor = %i, BeardColor = %i, EyeColor1 = %i, EyeColor2 = %i, HairStyle = %i, Face = %i, DrakkinHeritage = %i, DrakkinTattoo = %i, DrakkinDetails = %i, Size = %f",
+	Log(Logs::Detail, Logs::Spells, "Illusion: Race = %i, Gender = %i, Texture = %i, HelmTexture = %i, HairColor = %i, BeardColor = %i, EyeColor1 = %i, EyeColor2 = %i, HairStyle = %i, Face = %i, DrakkinHeritage = %i, DrakkinTattoo = %i, DrakkinDetails = %i, Size = %f",
 		race, gender, texture, helmtexture, haircolor, beardcolor, eyecolor1, eyecolor2, hairstyle, luclinface, drakkin_heritage, drakkin_tattoo, drakkin_details, size);
 }
 
@@ -2130,7 +2206,7 @@ void Mob::SendTargetable(bool on, Client *specific_target) {
 		entity_list.QueueClients(this, outapp);
 	}
 	else if (specific_target->IsClient()) {
-		specific_target->CastToClient()->QueuePacket(outapp, false);
+		specific_target->CastToClient()->QueuePacket(outapp);
 	}
 	safe_delete(outapp);
 }
@@ -2240,13 +2316,13 @@ const int32& Mob::SetMana(int32 amount)
 {
 	CalcMaxMana();
 	int32 mmana = GetMaxMana();
-	cur_mana = amount < 0 ? 0 : (amount > mmana ? mmana : amount);
+	current_mana = amount < 0 ? 0 : (amount > mmana ? mmana : amount);
 /*
 	if(IsClient())
 		LogFile->write(EQEMuLog::Debug, "Setting mana for %s to %d (%4.1f%%)", GetName(), amount, GetManaRatio());
 */
 
-	return cur_mana;
+	return current_mana;
 }
 
 
@@ -2363,18 +2439,18 @@ float Mob::MobAngle(Mob *other, float ourx, float oury) const {
 	float mobx = -(other->GetX());	// mob xloc (inverse because eq)
 	float moby = other->GetY();		// mob yloc
 	float heading = other->GetHeading();	// mob heading
-	heading = (heading * 360.0f) / 256.0f;	// convert to degrees
+	heading = (heading * 360.0f) / 512.0f;	// convert to degrees
 	if (heading < 270)
 		heading += 90;
 	else
 		heading -= 270;
 
 	heading = heading * 3.1415f / 180.0f;	// convert to radians
-	vectorx = mobx + (10.0f * cosf(heading));	// create a vector based on heading
-	vectory = moby + (10.0f * sinf(heading));	// of mob length 10
+	vectorx = mobx + (10.0f * std::cos(heading));	// create a vector based on heading
+	vectory = moby + (10.0f * std::sin(heading));	// of mob length 10
 
 	// length of mob to player vector
-	lengthb = (float) sqrtf(((-ourx - mobx) * (-ourx - mobx)) + ((oury - moby) * (oury - moby)));
+	lengthb = (float) std::sqrt(((-ourx - mobx) * (-ourx - mobx)) + ((oury - moby) * (oury - moby)));
 
 	// calculate dot product to get angle
 	// Handle acos domain errors due to floating point rounding errors
@@ -2387,7 +2463,7 @@ float Mob::MobAngle(Mob *other, float ourx, float oury) const {
 	else if (dotp < -1)
 		return 180.0f;
 
-	angle = acosf(dotp);
+	angle = std::acos(dotp);
 	angle = angle * 180.0f / 3.1415f;
 
 	return angle;
@@ -2556,7 +2632,7 @@ bool Mob::PlotPositionAroundTarget(Mob* target, float &x_dest, float &y_dest, fl
 			look_heading = target->GetHeading();
 
 		// Convert to sony heading to radians
-		look_heading = (look_heading / 256.0f) * 6.283184f;
+		look_heading = (look_heading / 512.0f) * 6.283184f;
 
 		float tempX = 0;
 		float tempY = 0;
@@ -2664,20 +2740,10 @@ bool Mob::HateSummon() {
 		if(summon_level == 1) {
 			entity_list.MessageClose(this, true, 500, MT_Say, "%s says,'You will not evade me, %s!' ", GetCleanName(), target->GetCleanName() );
 
-			if (target->IsClient()) {
+			if (target->IsClient())
 				target->CastToClient()->MovePC(zone->GetZoneID(), zone->GetInstanceID(), m_Position.x, m_Position.y, m_Position.z, target->GetHeading(), 0, SummonPC);
-			}
-			else {
-#ifdef BOTS
-				if(target && target->IsBot()) {
-					// set pre summoning info to return to (to get out of melee range for caster)
-					target->CastToBot()->SetHasBeenSummoned(true);
-					target->CastToBot()->SetPreSummonLocation(glm::vec3(target->GetPosition()));
-
-				}
-#endif //BOTS
+			else
 				target->GMMove(m_Position.x, m_Position.y, m_Position.z, target->GetHeading());
-			}
 
 			return true;
 		} else if(summon_level == 2) {
@@ -2688,25 +2754,25 @@ bool Mob::HateSummon() {
 	return false;
 }
 
-void Mob::FaceTarget(Mob* MobToFace) {
-	Mob* facemob = MobToFace;
-	if(!facemob) {
+void Mob::FaceTarget(Mob* mob_to_face /*= 0*/) {
+	Mob* faced_mob = mob_to_face;
+	if(!faced_mob) {
 		if(!GetTarget()) {
 			return;
 		}
 		else {
-			facemob = GetTarget();
+			faced_mob = GetTarget();
 		}
 	}
 
-	float oldheading = GetHeading();
-	float newheading = CalculateHeadingToTarget(facemob->GetX(), facemob->GetY());
-	if(oldheading != newheading) {
-		SetHeading(newheading);
-		if(moving)
-			SendPosUpdate();
-		else
-		{
+	float current_heading = GetHeading();
+	float new_heading = CalculateHeadingToTarget(faced_mob->GetX(), faced_mob->GetY());
+	if(current_heading != new_heading) {
+		SetHeading(new_heading);
+		if (moving) {
+			SendPositionUpdate();
+		}
+		else {
 			SendPosition();
 		}
 	}
@@ -3091,6 +3157,26 @@ void Mob::Say_StringID(uint32 type, uint32 string_id, const char *message3, cons
 	);
 }
 
+void Mob::SayTo_StringID(Client *to, uint32 string_id, const char *message3, const char *message4, const char *message5, const char *message6, const char *message7, const char *message8, const char *message9)
+{
+	if (!to)
+		return;
+
+	auto string_id_str = std::to_string(string_id);
+
+	to->Message_StringID(10, GENERIC_STRINGID_SAY, GetCleanName(), string_id_str.c_str(), message3, message4, message5, message6, message7, message8, message9);
+}
+
+void Mob::SayTo_StringID(Client *to, uint32 type, uint32 string_id, const char *message3, const char *message4, const char *message5, const char *message6, const char *message7, const char *message8, const char *message9)
+{
+	if (!to)
+		return;
+
+	auto string_id_str = std::to_string(string_id);
+
+	to->Message_StringID(type, GENERIC_STRINGID_SAY, GetCleanName(), string_id_str.c_str(), message3, message4, message5, message6, message7, message8, message9);
+}
+
 void Mob::Shout(const char *format, ...)
 {
 	char buf[1000];
@@ -3254,7 +3340,7 @@ void Mob::ExecWeaponProc(const EQEmu::ItemInstance *inst, uint16 spell_id, Mob *
 	if(!IsValidSpell(spell_id)) { // Check for a valid spell otherwise it will crash through the function
 		if(IsClient()){
 			Message(0, "Invalid spell proc %u", spell_id);
-			Log.Out(Logs::Detail, Logs::Spells, "Player %s, Weapon Procced invalid spell %u", this->GetName(), spell_id);
+			Log(Logs::Detail, Logs::Spells, "Player %s, Weapon Procced invalid spell %u", this->GetName(), spell_id);
 		}
 		return;
 	}
@@ -3324,13 +3410,18 @@ int Mob::GetHaste()
 	else // 1-25
 		h += itembonuses.haste > 10 ? 10 : itembonuses.haste;
 
-	// 60+ 100, 51-59 85, 1-50 level+25
-	if (level > 59) // 60+
-		cap = RuleI(Character, HasteCap);
-	else if (level > 50) // 51-59
-		cap = 85;
-	else // 1-50
-		cap = level + 25;
+	// mobs are different!
+	Mob *owner = nullptr;
+	if (IsPet())
+		owner = GetOwner();
+	else if (IsNPC() && CastToNPC()->GetSwarmOwner())
+		owner = entity_list.GetMobID(CastToNPC()->GetSwarmOwner());
+	if (owner) {
+		cap = 10 + level;
+		cap += std::max(0, owner->GetLevel() - 39) + std::max(0, owner->GetLevel() - 60);
+	} else {
+		cap = 150;
+	}
 
 	if(h > cap)
 		h = cap;
@@ -3347,9 +3438,13 @@ int Mob::GetHaste()
 }
 
 void Mob::SetTarget(Mob* mob) {
-	if (target == mob) return;
+
+	if (target == mob) 
+		return;
+
 	target = mob;
 	entity_list.UpdateHoTT(this);
+	
 	if(IsNPC())
 		parse->EventNPC(EVENT_TARGET_CHANGE, CastToNPC(), mob, "", 0);
 	else if (IsClient())
@@ -3357,11 +3452,27 @@ void Mob::SetTarget(Mob* mob) {
 
 	if(IsPet() && GetOwner() && GetOwner()->IsClient())
 		GetOwner()->CastToClient()->UpdateXTargetType(MyPetTarget, mob);
+
+	if (this->IsClient() && this->GetTarget() && this->CastToClient()->hp_other_update_throttle_timer.Check())
+		this->GetTarget()->SendHPUpdate(false, true);
+}
+
+// For when we want a Ground Z at a location we are not at yet
+// Like MoveTo.
+float Mob::FindDestGroundZ(glm::vec3 dest, float z_offset)
+{
+	float best_z = BEST_Z_INVALID;
+	if (zone->zonemap != nullptr)
+	{
+		dest.z += z_offset;
+		best_z = zone->zonemap->FindBestZ(dest, nullptr);
+	}
+	return best_z;
 }
 
 float Mob::FindGroundZ(float new_x, float new_y, float z_offset)
 {
-	float ret = -999999;
+	float ret = BEST_Z_INVALID;
 	if (zone->zonemap != nullptr)
 	{
 		glm::vec3 me;
@@ -3370,7 +3481,7 @@ float Mob::FindGroundZ(float new_x, float new_y, float z_offset)
 		me.z = m_Position.z + z_offset;
 		glm::vec3 hit;
 		float best_z = zone->zonemap->FindBestZ(me, &hit);
-		if (best_z != -999999)
+		if (best_z != BEST_Z_INVALID)
 		{
 			ret = best_z;
 		}
@@ -3381,7 +3492,7 @@ float Mob::FindGroundZ(float new_x, float new_y, float z_offset)
 // Copy of above function that isn't protected to be exported to Perl::Mob
 float Mob::GetGroundZ(float new_x, float new_y, float z_offset)
 {
-	float ret = -999999;
+	float ret = BEST_Z_INVALID;
 	if (zone->zonemap != 0)
 	{
 		glm::vec3 me;
@@ -3390,7 +3501,7 @@ float Mob::GetGroundZ(float new_x, float new_y, float z_offset)
 		me.z = m_Position.z+z_offset;
 		glm::vec3 hit;
 		float best_z = zone->zonemap->FindBestZ(me, &hit);
-		if (best_z != -999999)
+		if (best_z != BEST_Z_INVALID)
 		{
 			ret = best_z;
 		}
@@ -3695,7 +3806,7 @@ void Mob::TryTriggerOnValueAmount(bool IsHP, bool IsMana, bool IsEndur, bool IsP
 							if ((base2 >= 500 && base2 <= 520) && GetHPRatio() < (base2 - 500)*5)
 								use_spell = true;
 
-							else if (base2 = 1004 && GetHPRatio() < 80)
+							else if (base2 == 1004 && GetHPRatio() < 80)
 								use_spell = true;
 						}
 
@@ -3703,12 +3814,12 @@ void Mob::TryTriggerOnValueAmount(bool IsHP, bool IsMana, bool IsEndur, bool IsP
 							if ( (base2 = 521 && GetManaRatio() < 20) || (base2 = 523 && GetManaRatio() < 40))
 								use_spell = true;
 
-							else if (base2 = 38311 && GetManaRatio() < 10)
+							else if (base2 == 38311 && GetManaRatio() < 10)
 								use_spell = true;
 						}
 
 						else if (IsEndur){
-							if (base2 = 522 && GetEndurancePercent() < 40){
+							if (base2 == 522 && GetEndurancePercent() < 40){
 								use_spell = true;
 							}
 						}
@@ -3804,7 +3915,7 @@ int32 Mob::GetVulnerability(Mob* caster, uint32 spell_id, uint32 ticsremaining)
 
 			if((IsValidSpell(buffs[i].spellid) && IsEffectInSpell(buffs[i].spellid, SE_FcSpellVulnerability))){
 
-				int32 focus = caster->CalcFocusEffect(focusSpellVulnerability, buffs[i].spellid, spell_id);
+				int32 focus = caster->CalcFocusEffect(focusSpellVulnerability, buffs[i].spellid, spell_id, true);
 
 				if (!focus)
 					continue;
@@ -3821,6 +3932,8 @@ int32 Mob::GetVulnerability(Mob* caster, uint32 spell_id, uint32 ticsremaining)
 
 			}
 		}
+
+		tmp_focus = caster->CalcFocusEffect(focusSpellVulnerability, buffs[tmp_buffslot].spellid, spell_id);
 
 		if (tmp_focus < -99)
 			tmp_focus = -99;
@@ -3867,10 +3980,17 @@ int16 Mob::GetHealRate(uint16 spell_id, Mob* caster) {
 
 bool Mob::TryFadeEffect(int slot)
 {
+	if (!buffs[slot].spellid)
+		return false;
+
 	if(IsValidSpell(buffs[slot].spellid))
 	{
 		for(int i = 0; i < EFFECT_COUNT; i++)
 		{
+
+			if (!spells[buffs[slot].spellid].effectid[i])
+				continue;
+
 			if (spells[buffs[slot].spellid].effectid[i] == SE_CastOnFadeEffectAlways ||
 				spells[buffs[slot].spellid].effectid[i] == SE_CastOnRuneFadeEffect)
 			{
@@ -4557,16 +4677,16 @@ void Mob::DoKnockback(Mob *caster, uint32 pushback, uint32 pushup)
 		spu->x_pos		= FloatToEQ19(GetX());
 		spu->y_pos		= FloatToEQ19(GetY());
 		spu->z_pos		= FloatToEQ19(GetZ());
-		spu->delta_x	= NewFloatToEQ13(static_cast<float>(new_x));
-		spu->delta_y	= NewFloatToEQ13(static_cast<float>(new_y));
-		spu->delta_z	= NewFloatToEQ13(static_cast<float>(pushup));
-		spu->heading	= FloatToEQ19(GetHeading());
+		spu->delta_x	= FloatToEQ13(static_cast<float>(new_x));
+		spu->delta_y	= FloatToEQ13(static_cast<float>(new_y));
+		spu->delta_z	= FloatToEQ13(static_cast<float>(pushup));
+		spu->heading	= FloatToEQ12(GetHeading());
 		spu->padding0002	=0;
 		spu->padding0006	=7;
 		spu->padding0014	=0x7f;
 		spu->padding0018	=0x5df27;
 		spu->animation = 0;
-		spu->delta_heading = NewFloatToEQ13(0);
+		spu->delta_heading = FloatToEQ10(0);
 		outapp_push->priority = 6;
 		entity_list.QueueClients(this, outapp_push, true);
 		CastToClient()->FastQueuePacket(&outapp_push);
@@ -4650,16 +4770,13 @@ bool Mob::TrySpellOnDeath()
 	//in death because the heal will not register before the script kills you.
 }
 
-int16 Mob::GetCritDmgMob(uint16 skill)
+int16 Mob::GetCritDmgMod(uint16 skill)
 {
 	int critDmg_mod = 0;
 
 	// All skill dmg mod + Skill specific
-	critDmg_mod += itembonuses.CritDmgMob[EQEmu::skills::HIGHEST_SKILL + 1] + spellbonuses.CritDmgMob[EQEmu::skills::HIGHEST_SKILL + 1] + aabonuses.CritDmgMob[EQEmu::skills::HIGHEST_SKILL + 1] +
-					itembonuses.CritDmgMob[skill] + spellbonuses.CritDmgMob[skill] + aabonuses.CritDmgMob[skill];
-
-	if(critDmg_mod < -100)
-		critDmg_mod = -100;
+	critDmg_mod += itembonuses.CritDmgMod[EQEmu::skills::HIGHEST_SKILL + 1] + spellbonuses.CritDmgMod[EQEmu::skills::HIGHEST_SKILL + 1] + aabonuses.CritDmgMod[EQEmu::skills::HIGHEST_SKILL + 1] +
+					itembonuses.CritDmgMod[skill] + spellbonuses.CritDmgMod[skill] + aabonuses.CritDmgMod[skill];
 
 	return critDmg_mod;
 }
@@ -4781,7 +4898,7 @@ void Mob::MeleeLifeTap(int32 damage) {
 	if(lifetap_amt && damage > 0){
 
 		lifetap_amt = damage * lifetap_amt / 100;
-		Log.Out(Logs::Detail, Logs::Combat, "Melee lifetap healing for %d damage.", damage);
+		Log(Logs::Detail, Logs::Combat, "Melee lifetap healing for %d damage.", damage);
 
 		if (lifetap_amt > 0)
 			HealDamage(lifetap_amt); //Heal self for modified damage amount.
@@ -4887,7 +5004,7 @@ void Mob::DoGravityEffect()
 		}
 
 		if(IsClient())
-			this->CastToClient()->MovePC(zone->GetZoneID(), zone->GetInstanceID(), cur_x, cur_y, new_ground, GetHeading()*2); // I know the heading thing is weird(chance of movepc to halve the heading value, too lazy to figure out why atm)
+			this->CastToClient()->MovePC(zone->GetZoneID(), zone->GetInstanceID(), cur_x, cur_y, new_ground, GetHeading());
 		else
 			this->GMMove(cur_x, cur_y, new_ground, GetHeading());
 	}
@@ -4913,6 +5030,18 @@ void Mob::SpreadVirus(uint16 spell_id, uint16 casterID)
 			}
 		}
 	}
+}
+
+void Mob::AddNimbusEffect(int effectid)
+{
+	SetNimbusEffect(effectid);
+
+	auto outapp = new EQApplicationPacket(OP_AddNimbusEffect, sizeof(RemoveNimbusEffect_Struct));
+	auto ane = (RemoveNimbusEffect_Struct *)outapp->pBuffer;
+	ane->spawnid = GetID();
+	ane->nimbus_effect = effectid;
+	entity_list.QueueClients(this, outapp);
+	safe_delete(outapp);
 }
 
 void Mob::RemoveNimbusEffect(int effectid)
@@ -5512,8 +5641,7 @@ bool Mob::IsFacingMob(Mob *other)
 	if (!other)
 		return false;
 	float angle = HeadingAngleToMob(other);
-	// what the client uses appears to be 2x our internal heading
-	float heading = GetHeading() * 2.0f;
+	float heading = GetHeading();
 
 	if (angle > 472.0 && heading < 40.0)
 		angle = heading;
@@ -5527,15 +5655,13 @@ bool Mob::IsFacingMob(Mob *other)
 }
 
 // All numbers derived from the client
-float Mob::HeadingAngleToMob(Mob *other)
+float Mob::HeadingAngleToMob(float other_x, float other_y)
 {
-	float mob_x = other->GetX();
-	float mob_y = other->GetY();
 	float this_x = GetX();
 	float this_y = GetY();
 
-	float y_diff = std::abs(this_y - mob_y);
-	float x_diff = std::abs(this_x - mob_x);
+	float y_diff = std::abs(this_y - other_y);
+	float x_diff = std::abs(this_x - other_x);
 	if (y_diff < 0.0000009999999974752427)
 		y_diff = 0.0000009999999974752427;
 
@@ -5543,13 +5669,13 @@ float Mob::HeadingAngleToMob(Mob *other)
 
 	// return the right thing based on relative quadrant
 	// I'm sure this could be improved for readability, but whatever
-	if (this_y >= mob_y) {
-		if (mob_x >= this_x)
+	if (this_y >= other_y) {
+		if (other_x >= this_x)
 			return (90.0f - angle + 90.0f) * 511.5f * 0.0027777778f;
-		if (mob_x <= this_x)
+		if (other_x <= this_x)
 			return (angle + 180.0f) * 511.5f * 0.0027777778f;
 	}
-	if (this_y > mob_y || mob_x > this_x)
+	if (this_y > other_y || other_x > this_x)
 		return angle * 511.5f * 0.0027777778f;
 	else
 		return (90.0f - angle + 270.0f) * 511.5f * 0.0027777778f;

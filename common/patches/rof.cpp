@@ -57,11 +57,11 @@ namespace RoF
 	static inline uint32 RoFToServerTypelessSlot(structs::TypelessInventorySlot_Struct rofSlot);
 	static inline uint32 RoFToServerCorpseSlot(uint32 rofCorpseSlot);
 
-	// server to client text link converter
-	static inline void ServerToRoFTextLink(std::string& rofTextLink, const std::string& serverTextLink);
+	// server to client say link converter
+	static inline void ServerToRoFSayLink(std::string& rofSayLink, const std::string& serverSayLink);
 
-	// client to server text link converter
-	static inline void RoFToServerTextLink(std::string& serverTextLink, const std::string& rofTextLink);
+	// client to server say link converter
+	static inline void RoFToServerSayLink(std::string& serverSayLink, const std::string& rofSayLink);
 
 	static inline CastingSlot ServerToRoFCastingSlot(EQEmu::CastingSlot slot);
 	static inline EQEmu::CastingSlot RoFToServerCastingSlot(CastingSlot slot);
@@ -83,14 +83,14 @@ namespace RoF
 			//TODO: figure out how to support shared memory with multiple patches...
 			opcodes = new RegularOpcodeManager();
 			if (!opcodes->LoadOpcodes(opfile.c_str())) {
-				Log.Out(Logs::General, Logs::Netcode, "[OPCODES] Error loading opcodes file %s. Not registering patch %s.", opfile.c_str(), name);
+				Log(Logs::General, Logs::Netcode, "[OPCODES] Error loading opcodes file %s. Not registering patch %s.", opfile.c_str(), name);
 				return;
 			}
 		}
 
 		//ok, now we have what we need to register.
 
-		EQStream::Signature signature;
+		EQStreamInterface::Signature signature;
 		std::string pname;
 
 		//register our world signature.
@@ -106,7 +106,7 @@ namespace RoF
 		signature.first_length = sizeof(structs::ClientZoneEntry_Struct);
 		signature.first_eq_opcode = opcodes->EmuToEQ(OP_ZoneEntry);
 		into.RegisterPatch(signature, pname.c_str(), &opcodes, &struct_strategy);
-		Log.Out(Logs::General, Logs::Netcode, "[IDENTIFY] Registered patch %s", name);
+		Log(Logs::General, Logs::Netcode, "[IDENTIFY] Registered patch %s", name);
 	}
 
 	void Reload()
@@ -123,10 +123,10 @@ namespace RoF
 			opfile += name;
 			opfile += ".conf";
 			if (!opcodes->ReloadOpcodes(opfile.c_str())) {
-				Log.Out(Logs::General, Logs::Netcode, "[OPCODES] Error reloading opcodes file %s for patch %s.", opfile.c_str(), name);
+				Log(Logs::General, Logs::Netcode, "[OPCODES] Error reloading opcodes file %s for patch %s.", opfile.c_str(), name);
 				return;
 			}
-			Log.Out(Logs::General, Logs::Netcode, "[OPCODES] Reloaded opcodes for patch %s", name);
+			Log(Logs::General, Logs::Netcode, "[OPCODES] Reloaded opcodes for patch %s", name);
 		}
 	}
 
@@ -163,22 +163,23 @@ namespace RoF
 		OUT(level);
 		eq->unknown06 = 0;
 		eq->instrument_mod = 1.0f + (emu->instrument_mod - 10) / 10.0f;
-		eq->bard_focus_id = emu->bard_focus_id;
-		eq->knockback_angle = emu->sequence;
-		eq->unknown22 = 0;
+		OUT(force);
+		OUT(hit_heading);
+		OUT(hit_pitch);
 		OUT(type);
 		eq->damage = 0;
 		eq->unknown31 = 0;
 		OUT(spell);
-		eq->level2 = eq->level;
-		eq->effect_flag = emu->buff_unknown;
-		eq->unknown39 = 14;
-		eq->unknown43 = 0;
-		eq->unknown44 = 17;
-		eq->unknown45 = 0;
-		eq->unknown46 = -1;
-		eq->unknown50 = 0;
-		eq->unknown54 = 0;
+		OUT(spell_level);
+		OUT(effect_flag);
+		eq->spell_gem = 0;
+		eq->slot.Type = INVALID_INDEX;
+		eq->slot.Unknown02 = 0;
+		eq->slot.Slot = INVALID_INDEX;
+		eq->slot.SubIndex = INVALID_INDEX;
+		eq->slot.AugIndex = INVALID_INDEX;
+		eq->slot.Unknown01 = 0;
+		eq->item_cast_type = 0;
 
 		FINISH_ENCODE();
 	}
@@ -347,7 +348,7 @@ namespace RoF
 
 		if (EntryCount == 0 || (in->size % sizeof(BazaarSearchResults_Struct)) != 0)
 		{
-			Log.Out(Logs::General, Logs::Netcode, "[STRUCTS] Wrong size on outbound %s: Got %d, expected multiple of %d", opcodes->EmuToName(in->GetOpcode()), in->size, sizeof(BazaarSearchResults_Struct));
+			Log(Logs::General, Logs::Netcode, "[STRUCTS] Wrong size on outbound %s: Got %d, expected multiple of %d", opcodes->EmuToName(in->GetOpcode()), in->size, sizeof(BazaarSearchResults_Struct));
 			delete in;
 			return;
 		}
@@ -460,7 +461,7 @@ namespace RoF
 	{
 		SETUP_VAR_ENCODE(BuffIcon_Struct);
 
-		uint32 sz = 12 + (17 * emu->count);
+		uint32 sz = 12 + (17 * emu->count) + emu->name_lengths; // 17 includes nullterm
 		__packet->size = sz;
 		__packet->pBuffer = new unsigned char[sz];
 		memset(__packet->pBuffer, 0, sz);
@@ -476,7 +477,7 @@ namespace RoF
 			__packet->WriteUInt32(emu->entries[i].spell_id);
 			__packet->WriteUInt32(emu->entries[i].tics_remaining);
 			__packet->WriteUInt32(emu->entries[i].num_hits); // Unknown
-			__packet->WriteString("");
+			__packet->WriteString(emu->entries[i].caster);
 		}
 		__packet->WriteUInt8(emu->type); // Unknown
 
@@ -520,7 +521,7 @@ namespace RoF
 
 		std::string old_message = emu->message;
 		std::string new_message;
-		ServerToRoFTextLink(new_message, old_message);
+		ServerToRoFSayLink(new_message, old_message);
 
 		//in->size = strlen(emu->sender) + 1 + strlen(emu->targetname) + 1 + strlen(emu->message) + 1 + 36;
 		in->size = strlen(emu->sender) + strlen(emu->targetname) + new_message.length() + 39;
@@ -569,7 +570,7 @@ namespace RoF
 
 		int item_count = in->size / sizeof(EQEmu::InternalSerializedItem_Struct);
 		if (!item_count || (in->size % sizeof(EQEmu::InternalSerializedItem_Struct)) != 0) {
-			Log.Out(Logs::General, Logs::Netcode, "[STRUCTS] Wrong size on outbound %s: Got %d, expected multiple of %d",
+			Log(Logs::General, Logs::Netcode, "[STRUCTS] Wrong size on outbound %s: Got %d, expected multiple of %d",
 				opcodes->EmuToName(in->GetOpcode()), in->size, sizeof(EQEmu::InternalSerializedItem_Struct));
 
 			delete in;
@@ -586,7 +587,7 @@ namespace RoF
 		for (int index = 0; index < item_count; ++index, ++eq) {
 			SerializeItem(ob, (const EQEmu::ItemInstance*)eq->inst, eq->slot_id, 0);
 			if (ob.tellp() == last_pos)
-				Log.Out(Logs::General, Logs::Netcode, "[STRUCTS] Serialization failed on item slot %d during OP_CharInventory.  Item skipped.", eq->slot_id);
+				Log(Logs::General, Logs::Netcode, "[STRUCTS] Serialization failed on item slot %d during OP_CharInventory.  Item skipped.", eq->slot_id);
 
 			last_pos = ob.tellp();
 		}
@@ -659,8 +660,8 @@ namespace RoF
 		OUT(spellid);
 		OUT(damage);
 		OUT(force);
-		OUT(meleepush_xy);
-		OUT(meleepush_z);
+		OUT(hit_heading);
+		OUT(hit_pitch);
 		OUT(special);
 
 		FINISH_ENCODE();
@@ -847,7 +848,7 @@ namespace RoF
 
 		std::string old_message = emu->message;
 		std::string new_message;
-		ServerToRoFTextLink(new_message, old_message);
+		ServerToRoFSayLink(new_message, old_message);
 
 		//if (new_message.length() > 512) // length restricted in packet building function due vari-length name size (no nullterm)
 		//	new_message = new_message.substr(0, 512);
@@ -899,7 +900,7 @@ namespace RoF
 
 		for (int i = 0; i < 9; ++i) {
 			if (old_message_array[i].length() == 0) { break; }
-			ServerToRoFTextLink(new_message_array[i], old_message_array[i]);
+			ServerToRoFSayLink(new_message_array[i], old_message_array[i]);
 			new_message_size += new_message_array[i].length() + 1;
 		}
 
@@ -1512,7 +1513,7 @@ namespace RoF
 
 		SerializeItem(ob, (const EQEmu::ItemInstance*)int_struct->inst, int_struct->slot_id, 0);
 		if (ob.tellp() == last_pos) {
-			Log.Out(Logs::General, Logs::Netcode, "[STRUCTS] Serialization failed on item slot %d.", int_struct->slot_id);
+			Log(Logs::General, Logs::Netcode, "[STRUCTS] Serialization failed on item slot %d.", int_struct->slot_id);
 			delete in;
 			return;
 		}
@@ -1849,6 +1850,7 @@ namespace RoF
 		eq->Text_Count = 4096;
 		memcpy(eq->Text, emu->Text, sizeof(eq->Text));
 		OUT(Buttons);
+		OUT(SoundControls);
 		OUT(Duration);
 		OUT(PopupID);
 		OUT(NegativeID);
@@ -2183,11 +2185,11 @@ namespace RoF
 			outapp->WriteUInt32(emu->skills[r]);
 		}
 
-		outapp->WriteUInt32(25);			// Unknown count
+		outapp->WriteUInt32(structs::MAX_PP_INNATE_SKILL);			// Innate Skills count
 
-		for (uint32 r = 0; r < 25; r++)
+		for (uint32 r = 0; r < structs::MAX_PP_INNATE_SKILL; r++)
 		{
-			outapp->WriteUInt32(0);			// Unknown
+			outapp->WriteUInt32(emu->InnateSkills[r]);			// Innate Skills (regen, slam, etc)
 		}
 
 		outapp->WriteUInt32(structs::MAX_PP_DISCIPLINES);	// Discipline count
@@ -2690,7 +2692,7 @@ namespace RoF
 
 		outapp->WriteUInt8(0);				// Unknown
 
-		Log.Out(Logs::General, Logs::Netcode, "[STRUCTS] Player Profile Packet is %i bytes", outapp->GetWritePosition());
+		Log(Logs::General, Logs::Netcode, "[STRUCTS] Player Profile Packet is %i bytes", outapp->GetWritePosition());
 
 		auto NewBuffer = new unsigned char[outapp->GetWritePosition()];
 		memcpy(NewBuffer, outapp->pBuffer, outapp->GetWritePosition());
@@ -3294,7 +3296,7 @@ namespace RoF
 		std::string old_message = &emu->message[strlen(emu->sayer)];
 		std::string new_message;
 
-		ServerToRoFTextLink(new_message, old_message);
+		ServerToRoFSayLink(new_message, old_message);
 
 		//in->size = 3 + 4 + 4 + strlen(emu->sayer) + 1 + 12 + new_message.length() + 1;
 		in->size = strlen(emu->sayer) + new_message.length() + 25;
@@ -3368,7 +3370,7 @@ namespace RoF
 
 		std::string old_message = InBuffer; // start 'Reward' as string
 		std::string new_message;
-		ServerToRoFTextLink(new_message, old_message);
+		ServerToRoFSayLink(new_message, old_message);
 
 		in->size = sizeof(TaskDescriptionHeader_Struct) + sizeof(TaskDescriptionData1_Struct)+
 			sizeof(TaskDescriptionData2_Struct) + sizeof(TaskDescriptionTrailer_Struct)+
@@ -3550,7 +3552,7 @@ namespace RoF
 
 		if (EntryCount == 0 || ((in->size % sizeof(Track_Struct))) != 0)
 		{
-			Log.Out(Logs::General, Logs::Netcode, "[STRUCTS] Wrong size on outbound %s: Got %d, expected multiple of %d", opcodes->EmuToName(in->GetOpcode()), in->size, sizeof(Track_Struct));
+			Log(Logs::General, Logs::Netcode, "[STRUCTS] Wrong size on outbound %s: Got %d, expected multiple of %d", opcodes->EmuToName(in->GetOpcode()), in->size, sizeof(Track_Struct));
 			delete in;
 			return;
 		}
@@ -3846,8 +3848,11 @@ namespace RoF
 		OUT(y);
 		OUT(x);
 		OUT(z)
-			OUT(zone_reason);
+		OUT(zone_reason);
 		OUT(success);
+
+		if (eq->success < 0)
+			eq->success -= 1;
 
 		FINISH_ENCODE();
 	}
@@ -3898,7 +3903,7 @@ namespace RoF
 		//determine and verify length
 		int entrycount = in->size / sizeof(Spawn_Struct);
 		if (entrycount == 0 || (in->size % sizeof(Spawn_Struct)) != 0) {
-			Log.Out(Logs::General, Logs::Netcode, "[STRUCTS] Wrong size on outbound %s: Got %d, expected multiple of %d", opcodes->EmuToName(in->GetOpcode()), in->size, sizeof(Spawn_Struct));
+			Log(Logs::General, Logs::Netcode, "[STRUCTS] Wrong size on outbound %s: Got %d, expected multiple of %d", opcodes->EmuToName(in->GetOpcode()), in->size, sizeof(Spawn_Struct));
 			delete in;
 			return;
 		}
@@ -3929,7 +3934,7 @@ namespace RoF
 			if (strlen(emu->suffix))
 				PacketSize += strlen(emu->suffix) + 1;
 
-			bool ShowName = 1;
+			bool ShowName = emu->show_name;
 			if (emu->bodytype >= 66)
 			{
 				emu->race = 127;
@@ -4146,7 +4151,7 @@ namespace RoF
 			Buffer += 29;
 			if (Buffer != (BufferStart + PacketSize))
 			{
-				Log.Out(Logs::General, Logs::Netcode, "[ERROR] SPAWN ENCODE LOGIC PROBLEM: Buffer pointer is now %i from end", Buffer - (BufferStart + PacketSize));
+				Log(Logs::General, Logs::Netcode, "[ERROR] SPAWN ENCODE LOGIC PROBLEM: Buffer pointer is now %i from end", Buffer - (BufferStart + PacketSize));
 			}
 			//Log.LogDebugType(Logs::General, Logs::Netcode, "[ERROR] Sending zone spawn for %s packet is %i bytes", emu->name, outapp->size);
 			//Log.Hex(Logs::Netcode, outapp->pBuffer, outapp->size);
@@ -4351,7 +4356,7 @@ namespace RoF
 
 		std::string old_message = InBuffer;
 		std::string new_message;
-		RoFToServerTextLink(new_message, old_message);
+		RoFToServerSayLink(new_message, old_message);
 
 		//__packet->size = sizeof(ChannelMessage_Struct)+strlen(InBuffer) + 1;
 		__packet->size = sizeof(ChannelMessage_Struct) + new_message.length() + 1;
@@ -4462,7 +4467,7 @@ namespace RoF
 		IN(type);
 		IN(spellid);
 		IN(damage);
-		IN(meleepush_xy);
+		IN(hit_heading);
 
 		FINISH_DIRECT_DECODE();
 	}
@@ -4485,7 +4490,7 @@ namespace RoF
 
 		std::string old_message = (char *)&__eq_buffer[4]; // unknown01 offset
 		std::string new_message;
-		RoFToServerTextLink(new_message, old_message);
+		RoFToServerSayLink(new_message, old_message);
 
 		__packet->size = sizeof(Emote_Struct);
 		__packet->pBuffer = new unsigned char[__packet->size];
@@ -4715,7 +4720,7 @@ namespace RoF
 			return;
 		}
 		default:
-			Log.Out(Logs::Detail, Logs::Netcode, "Unhandled OP_GuildBank action");
+			Log(Logs::Detail, Logs::Netcode, "Unhandled OP_GuildBank action");
 			__packet->SetOpcode(OP_Unknown); /* invalidate the packet */
 			return;
 		}
@@ -4861,7 +4866,7 @@ namespace RoF
 		SETUP_DIRECT_DECODE(MoveItem_Struct, structs::MoveItem_Struct);
 
 		//Log.LogDebugType(Logs::General, Logs::Netcode, "[ERROR] Moved item from %u to %u", eq->from_slot.MainSlot, eq->to_slot.MainSlot);
-		Log.Out(Logs::General, Logs::Netcode, "[RoF] MoveItem SlotType from %i to %i, MainSlot from %i to %i, SubSlot from %i to %i, AugSlot from %i to %i, Unknown01 from %i to %i, Number %u", eq->from_slot.Type, eq->to_slot.Type, eq->from_slot.Slot, eq->to_slot.Slot, eq->from_slot.SubIndex, eq->to_slot.SubIndex, eq->from_slot.AugIndex, eq->to_slot.AugIndex, eq->from_slot.Unknown01, eq->to_slot.Unknown01, eq->number_in_stack);
+		Log(Logs::General, Logs::Netcode, "[RoF] MoveItem SlotType from %i to %i, MainSlot from %i to %i, SubSlot from %i to %i, AugSlot from %i to %i, Unknown01 from %i to %i, Number %u", eq->from_slot.Type, eq->to_slot.Type, eq->from_slot.Slot, eq->to_slot.Slot, eq->from_slot.SubIndex, eq->to_slot.SubIndex, eq->from_slot.AugIndex, eq->to_slot.AugIndex, eq->from_slot.Unknown01, eq->to_slot.Unknown01, eq->number_in_stack);
 		emu->from_slot = RoFToServerSlot(eq->from_slot);
 		emu->to_slot = RoFToServerSlot(eq->to_slot);
 		IN(number_in_stack);
@@ -5721,7 +5726,7 @@ namespace RoF
 			RoFSlot.Slot = TempSlot;
 		}
 
-		Log.Out(Logs::General, Logs::Netcode, "[ERROR] Convert Server Slot %i to RoF Slots: Type %i, Unk2 %i, Main %i, Sub %i, Aug %i, Unk1 %i", serverSlot, RoFSlot.Type, RoFSlot.Unknown02, RoFSlot.Slot, RoFSlot.SubIndex, RoFSlot.AugIndex, RoFSlot.Unknown01);
+		Log(Logs::General, Logs::Netcode, "[ERROR] Convert Server Slot %i to RoF Slots: Type %i, Unk2 %i, Main %i, Sub %i, Aug %i, Unk1 %i", serverSlot, RoFSlot.Type, RoFSlot.Unknown02, RoFSlot.Slot, RoFSlot.SubIndex, RoFSlot.AugIndex, RoFSlot.Unknown01);
 
 		return RoFSlot;
 	}
@@ -5762,7 +5767,7 @@ namespace RoF
 			RoFSlot.SubIndex = TempSlot - ((RoFSlot.Slot + 2) * EQEmu::inventory::ContainerCount);
 		}
 
-		Log.Out(Logs::General, Logs::Netcode, "[ERROR] Convert Server Slot %i to RoF Slots: Main %i, Sub %i, Aug %i, Unk1 %i", serverSlot, RoFSlot.Slot, RoFSlot.SubIndex, RoFSlot.AugIndex, RoFSlot.Unknown01);
+		Log(Logs::General, Logs::Netcode, "[ERROR] Convert Server Slot %i to RoF Slots: Main %i, Sub %i, Aug %i, Unk1 %i", serverSlot, RoFSlot.Slot, RoFSlot.SubIndex, RoFSlot.AugIndex, RoFSlot.Unknown01);
 
 		return RoFSlot;
 	}
@@ -5867,7 +5872,7 @@ namespace RoF
 			ServerSlot = INVALID_INDEX;
 		}
 
-		Log.Out(Logs::General, Logs::Netcode, "[ERROR] Convert RoF Slots: Type %i, Unk2 %i, Main %i, Sub %i, Aug %i, Unk1 %i to Server Slot %i", rofSlot.Type, rofSlot.Unknown02, rofSlot.Slot, rofSlot.SubIndex, rofSlot.AugIndex, rofSlot.Unknown01, ServerSlot);
+		Log(Logs::General, Logs::Netcode, "[ERROR] Convert RoF Slots: Type %i, Unk2 %i, Main %i, Sub %i, Aug %i, Unk1 %i to Server Slot %i", rofSlot.Type, rofSlot.Unknown02, rofSlot.Slot, rofSlot.SubIndex, rofSlot.AugIndex, rofSlot.Unknown01, ServerSlot);
 
 		return ServerSlot;
 	}
@@ -5902,7 +5907,7 @@ namespace RoF
 			ServerSlot = TempSlot;
 		}
 
-		Log.Out(Logs::General, Logs::Netcode, "[ERROR] Convert RoF Slots: Main %i, Sub %i, Aug %i, Unk1 %i to Server Slot %i", rofSlot.Slot, rofSlot.SubIndex, rofSlot.AugIndex, rofSlot.Unknown01, ServerSlot);
+		Log(Logs::General, Logs::Netcode, "[ERROR] Convert RoF Slots: Main %i, Sub %i, Aug %i, Unk1 %i to Server Slot %i", rofSlot.Slot, rofSlot.SubIndex, rofSlot.AugIndex, rofSlot.Unknown01, ServerSlot);
 
 		return ServerSlot;
 	}
@@ -5912,19 +5917,19 @@ namespace RoF
 		return (rofCorpseSlot - 1);
 	}
 
-	static inline void ServerToRoFTextLink(std::string& rofTextLink, const std::string& serverTextLink)
+	static inline void ServerToRoFSayLink(std::string& rofSayLink, const std::string& serverSayLink)
 	{
-		if ((constants::SayLinkBodySize == EQEmu::legacy::TEXT_LINK_BODY_LENGTH) || (serverTextLink.find('\x12') == std::string::npos)) {
-			rofTextLink = serverTextLink;
+		if ((constants::SayLinkBodySize == EQEmu::constants::SayLinkBodySize) || (serverSayLink.find('\x12') == std::string::npos)) {
+			rofSayLink = serverSayLink;
 			return;
 		}
 
-		auto segments = SplitString(serverTextLink, '\x12');
+		auto segments = SplitString(serverSayLink, '\x12');
 
 		for (size_t segment_iter = 0; segment_iter < segments.size(); ++segment_iter) {
 			if (segment_iter & 1) {
-				if (segments[segment_iter].length() <= EQEmu::legacy::TEXT_LINK_BODY_LENGTH) {
-					rofTextLink.append(segments[segment_iter]);
+				if (segments[segment_iter].length() <= EQEmu::constants::SayLinkBodySize) {
+					rofSayLink.append(segments[segment_iter]);
 					// TODO: log size mismatch error
 					continue;
 				}
@@ -5934,36 +5939,36 @@ namespace RoF
 				// RoF:  X XXXXX XXXXX XXXXX XXXXX XXXXX XXXXX XXXXX X  XXXX  X XXXXX XXXXXXXX (55)
 				// Diff:                                                     ^
 
-				rofTextLink.push_back('\x12');
-				rofTextLink.append(segments[segment_iter].substr(0, 41));
+				rofSayLink.push_back('\x12');
+				rofSayLink.append(segments[segment_iter].substr(0, 41));
 
 				if (segments[segment_iter][41] == '0')
-					rofTextLink.push_back(segments[segment_iter][42]);
+					rofSayLink.push_back(segments[segment_iter][42]);
 				else
-					rofTextLink.push_back('F');
+					rofSayLink.push_back('F');
 
-				rofTextLink.append(segments[segment_iter].substr(43));
-				rofTextLink.push_back('\x12');
+				rofSayLink.append(segments[segment_iter].substr(43));
+				rofSayLink.push_back('\x12');
 			}
 			else {
-				rofTextLink.append(segments[segment_iter]);
+				rofSayLink.append(segments[segment_iter]);
 			}
 		}
 	}
 
-	static inline void RoFToServerTextLink(std::string& serverTextLink, const std::string& rofTextLink)
+	static inline void RoFToServerSayLink(std::string& serverSayLink, const std::string& rofSayLink)
 	{
-		if ((EQEmu::legacy::TEXT_LINK_BODY_LENGTH == constants::SayLinkBodySize) || (rofTextLink.find('\x12') == std::string::npos)) {
-			serverTextLink = rofTextLink;
+		if ((EQEmu::constants::SayLinkBodySize == constants::SayLinkBodySize) || (rofSayLink.find('\x12') == std::string::npos)) {
+			serverSayLink = rofSayLink;
 			return;
 		}
 
-		auto segments = SplitString(rofTextLink, '\x12');
+		auto segments = SplitString(rofSayLink, '\x12');
 
 		for (size_t segment_iter = 0; segment_iter < segments.size(); ++segment_iter) {
 			if (segment_iter & 1) {
 				if (segments[segment_iter].length() <= constants::SayLinkBodySize) {
-					serverTextLink.append(segments[segment_iter]);
+					serverSayLink.append(segments[segment_iter]);
 					// TODO: log size mismatch error
 					continue;
 				}
@@ -5973,14 +5978,14 @@ namespace RoF
 				// RoF2: X XXXXX XXXXX XXXXX XXXXX XXXXX XXXXX XXXXX X  XXXX XX  XXXXX XXXXXXXX (56)
 				// Diff:                                                     ^
 
-				serverTextLink.push_back('\x12');
-				serverTextLink.append(segments[segment_iter].substr(0, 41));
-				serverTextLink.push_back('0');
-				serverTextLink.append(segments[segment_iter].substr(41));
-				serverTextLink.push_back('\x12');
+				serverSayLink.push_back('\x12');
+				serverSayLink.append(segments[segment_iter].substr(0, 41));
+				serverSayLink.push_back('0');
+				serverSayLink.append(segments[segment_iter].substr(41));
+				serverSayLink.push_back('\x12');
 			}
 			else {
-				serverTextLink.append(segments[segment_iter]);
+				serverSayLink.append(segments[segment_iter]);
 			}
 		}
 	}

@@ -1296,16 +1296,20 @@ XS(XS_Client_MovePC)
 			THIS->MovePC(zoneID, x, y, z, heading);
 		}
 		else {
-			if (THIS->IsMerc())
-				Log.Out(Logs::Detail, Logs::None, "[CLIENT] Perl(XS_Client_MovePC) attempted to process a type Merc reference");
-			else if (THIS->IsNPC())
-				Log.Out(Logs::Detail, Logs::None, "[CLIENT] Perl(XS_Client_MovePC) attempted to process a type NPC reference");
+			if (THIS->IsMerc()) {
+				Log(Logs::Detail, Logs::None, "[CLIENT] Perl(XS_Client_MovePC) attempted to process a type Merc reference");
+			}
+			else if (THIS->IsNPC()) {
+				Log(Logs::Detail, Logs::None, "[CLIENT] Perl(XS_Client_MovePC) attempted to process a type NPC reference");
+			}
 		#ifdef BOTS
-			else if (THIS->IsBot())
-				Log.Out(Logs::Detail, Logs::None, "[CLIENT] Perl(XS_Client_MovePC) attempted to process a type Bot reference");
+			else if (THIS->IsBot()) {
+				Log(Logs::Detail, Logs::None, "[CLIENT] Perl(XS_Client_MovePC) attempted to process a type Bot reference");
+			}
 		#endif
-			else
-				Log.Out(Logs::Detail, Logs::None, "[CLIENT] Perl(XS_Client_MovePC) attempted to process an Unknown type reference");
+			else {
+				Log(Logs::Detail, Logs::None, "[CLIENT] Perl(XS_Client_MovePC) attempted to process an Unknown type reference");
+			}
 
 			Perl_croak(aTHX_ "THIS is not of type Client");
 		}
@@ -1342,16 +1346,20 @@ XS(XS_Client_MovePCInstance)
 			THIS->MovePC(zoneID, instanceID, x, y, z, heading);
 		}
 		else {
-			if (THIS->IsMerc())
-				Log.Out(Logs::Detail, Logs::None, "[CLIENT] Perl(XS_Client_MovePCInstance) attempted to process a type Merc reference");
-			else if (THIS->IsNPC())
-				Log.Out(Logs::Detail, Logs::None, "[CLIENT] Perl(XS_Client_MovePCInstance) attempted to process a type NPC reference");
+			if (THIS->IsMerc()) {
+				Log(Logs::Detail, Logs::None, "[CLIENT] Perl(XS_Client_MovePCInstance) attempted to process a type Merc reference");
+			}
+			else if (THIS->IsNPC()) {
+				Log(Logs::Detail, Logs::None, "[CLIENT] Perl(XS_Client_MovePCInstance) attempted to process a type NPC reference");
+			}
 		#ifdef BOTS
-			else if (THIS->IsBot())
-				Log.Out(Logs::Detail, Logs::None, "[CLIENT] Perl(XS_Client_MovePCInstance) attempted to process a type Bot reference");
+			else if (THIS->IsBot()) {
+				Log(Logs::Detail, Logs::None, "[CLIENT] Perl(XS_Client_MovePCInstance) attempted to process a type Bot reference");
+			}
 		#endif
-			else
-				Log.Out(Logs::Detail, Logs::None, "[CLIENT] Perl(XS_Client_MovePCInstance) attempted to process an Unknown type reference");
+			else {
+				Log(Logs::Detail, Logs::None, "[CLIENT] Perl(XS_Client_MovePCInstance) attempted to process an Unknown type reference");
+			}
 
 			Perl_croak(aTHX_ "THIS is not of type Client");
 
@@ -6436,6 +6444,47 @@ XS(XS_Client_GetAccountAge) {
 	XSRETURN(1);
 }
 
+XS(XS_Client_Popup2); /* prototype to pass -Wmissing-prototypes */
+XS(XS_Client_Popup2)
+{
+	dXSARGS;
+	if (items < 3 || items > 10)
+		Perl_croak(aTHX_ "Usage: Client::SendFullPopup(THIS, Title, Text, PopupID, NegativeID, Buttons, Duration, ButtonName0, ButtonName1, SoundControls)");
+	{
+		Client *	THIS;
+		char*		Title = (char *)SvPV_nolen(ST(1));
+		char*		Text = (char *)SvPV_nolen(ST(2));
+		uint32 		PopupID =	0;
+		uint32 		NegativeID =	0;
+		uint32 		Buttons =	0;
+		uint32 		Duration =	0;
+		char*		ButtonName0 = 0;
+		char*		ButtonName1 = 0;
+		uint32 		SoundControls =	0;
+
+		if (sv_derived_from(ST(0), "Client")) {
+			IV tmp = SvIV((SV*)SvRV(ST(0)));
+			THIS = INT2PTR(Client *,tmp);
+		}
+		else
+			Perl_croak(aTHX_ "THIS is not of type Client");
+		if(THIS == nullptr)
+			Perl_croak(aTHX_ "THIS is nullptr, avoiding crash.");
+		
+		if (items > 3)	{ PopupID = (uint32)SvUV(ST(3)); }
+		if (items > 4)	{ NegativeID = (uint32)SvUV(ST(4)); }
+		if (items > 5)	{ Buttons = (uint32)SvUV(ST(5)); }
+		if (items > 6)	{ Duration = (uint32)SvUV(ST(6)); }
+		if (items > 7)	{ ButtonName0 = (char *)SvPV_nolen(ST(7)); }
+		if (items > 8)	{ ButtonName1 = (char *)SvPV_nolen(ST(8)); }
+		if (items > 9)	{ SoundControls = (uint32)SvUV(ST(9)); }
+
+
+		THIS->SendFullPopup(Title, Text, PopupID, NegativeID, Buttons, Duration, ButtonName0, ButtonName1, SoundControls);
+	}
+	XSRETURN_EMPTY;
+}
+
 
 #ifdef __cplusplus
 extern "C"
@@ -6690,6 +6739,7 @@ XS(boot_Client)
 		newXSproto(strcpy(buf, "CalcEXP"), XS_Client_CalcEXP, file, "$");
 		newXSproto(strcpy(buf, "GetMoney"), XS_Client_GetMoney, file, "$$$");
 		newXSproto(strcpy(buf, "GetAccountAge"), XS_Client_GetAccountAge, file, "$");
+		newXSproto(strcpy(buf, "Popup2"), XS_Client_Popup2, file, "$$$;$$$$$$$");
 		XSRETURN_YES;
 }
 
