@@ -1,44 +1,49 @@
-/*
-	Copyright (C) 2005 Michael S. Finger
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include "crc16.h"
-#include "global_define.h"
 #include "eq_packet.h"
-#include "misc.h"
-#include "op_codes.h"
-#include "platform.h"
+
+#include "common/misc.h"
+#include "common/op_codes.h"
+#ifndef STATIC_OPCODE
+#include "common/opcodemgr.h"
+#endif
+#include "common/packet_dump.h"
+#include "common/packet_functions.h"
+#include "common/platform.h"
+
+#include <cstdio>
 #include <iomanip>
 #include <iostream>
-#include <sstream>
-#include <stdio.h>
 
-#ifndef STATIC_OPCODE
-#include "opcodemgr.h"
-#endif
+EQPacket::EQPacket()
+{
+}
 
-#include "packet_dump.h"
-#include "packet_functions.h"
-#include <cstdlib>
-#include <cstring>
+EQPacket::EQPacket(EmuOpcode op, const unsigned char *buf, size_t len)
+	: BasePacket(buf, len)
+	, emu_opcode(op)
+{
+}
 
-EQPacket::EQPacket(EmuOpcode op, const unsigned char *buf, uint32 len)
-:	BasePacket(buf, len),
-	emu_opcode(op)
+EQPacket::EQPacket(EmuOpcode opcode, SerializeBuffer&& buf)
+	: BasePacket(std::move(buf))
+	, emu_opcode(opcode)
 {
 }
 
@@ -132,7 +137,7 @@ void EQApplicationPacket::build_header_dump(char *buffer) const
 #ifdef STATIC_OPCODE
 	sprintf(buffer, "[OpCode 0x%04x Size=%u]\n", emu_opcode,size);
 #else
-	sprintf(buffer, "[OpCode %s Size=%u]",OpcodeManager::EmuToName(emu_opcode),size);
+	sprintf(buffer, "[OpCode %s(0x%04x) Size=%u]",OpcodeManager::EmuToName(emu_opcode), GetProtocolOpcode(), size);
 #endif
 }
 
@@ -236,26 +241,6 @@ uint32 EQApplicationPacket::serialize(uint16 opcode, unsigned char *dest) const
 	return size+OpCodeBytes;
 }
 
-/*EQProtocolPacket::EQProtocolPacket(uint16 op, const unsigned char *buf, uint32 len)
-:	BasePacket(buf, len),
-	opcode(op)
-{
-
-uint32 offset;
-	opcode=ntohs(*(const uint16 *)buf);
-	offset=2;
-
-	if (len-offset) {
-		pBuffer= new unsigned char[len-offset];
-		memcpy(pBuffer,buf+offset,len-offset);
-		size=len-offset;
-	} else {
-		pBuffer=nullptr;
-		size=0;
-	}
-	OpMgr=&RawOpcodeManager;
-}*/
-
 bool EQProtocolPacket::combine(const EQProtocolPacket *rhs)
 {
 bool result=false;
@@ -285,74 +270,6 @@ bool result=false;
 
 	return result;
 
-}
-
-/*
-this is the code to do app-layer combining, instead of protocol layer.
-this was taken out due to complex interactions with the opcode manager,
-and will require a bit more thinking (likely moving into EQStream) to
-get running again... but might be a good thing some day.
-
-bool EQApplicationPacket::combine(const EQApplicationPacket *rhs)
-{
-uint32 newsize=0, offset=0;
-unsigned char *tmpbuffer=nullptr;
-
-	if (opcode!=OP_AppCombined) {
-		newsize=app_opcode_size+size+(size>254?3:1)+app_opcode_size+rhs->size+(rhs->size>254?3:1);
-		tmpbuffer=new unsigned char [newsize];
-		offset=0;
-		if (size>254) {
-			tmpbuffer[offset++]=0xff;
-			*(uint16 *)(tmpbuffer+offset)=htons(size);
-			offset+=1;
-		} else {
-			tmpbuffer[offset++]=size;
-		}
-		offset+=serialize(tmpbuffer+offset);
-	} else {
-		newsize=size+app_opcode_size+rhs->size+(rhs->size>254?3:1);
-		tmpbuffer=new unsigned char [newsize];
-		memcpy(tmpbuffer,pBuffer,size);
-		offset=size;
-	}
-
-	if (rhs->size>254) {
-		tmpbuffer[offset++]=0xff;
-		*(uint16 *)(tmpbuffer+offset)=htons(rhs->size);
-		offset+=1;
-	} else {
-		tmpbuffer[offset++]=rhs->size;
-	}
-	offset+=rhs->serialize(tmpbuffer+offset);
-
-	size=offset;
-	opcode=OP_AppCombined;
-
-	delete[] pBuffer;
-	pBuffer=tmpbuffer;
-
-	return true;
-}
-*/
-
-bool EQProtocolPacket::ValidateCRC(const unsigned char *buffer, int length, uint32 Key)
-{
-bool valid=false;
-	// OP_SessionRequest, OP_SessionResponse, OP_OutOfSession are not CRC'd
-	if (buffer[0]==0x00 && (buffer[1]==OP_SessionRequest || buffer[1]==OP_SessionResponse || buffer[1]==OP_OutOfSession)) {
-		valid=true;
-	} else {
-		uint16 comp_crc=CRC16(buffer,length-2,Key);
-		uint16 packet_crc=ntohs(*(const uint16 *)(buffer+length-2));
-#ifdef EQN_DEBUG
-		if (packet_crc && comp_crc != packet_crc) {
-			std::cout << "CRC mismatch: comp=" << std::hex << comp_crc << ", packet=" << packet_crc << std::dec << std::endl;
-		}
-#endif
-		valid = (!packet_crc || comp_crc == packet_crc);
-	}
-	return valid;
 }
 
 uint32 EQProtocolPacket::Decompress(const unsigned char *buffer, const uint32 length, unsigned char *newbuf, uint32 newbufsize)
@@ -401,55 +318,6 @@ uint32 flag_offset=1,newlength;
 	//dump_message_column(newbuf,length,"After: ");
 
 	return newlength;
-}
-
-void EQProtocolPacket::ChatDecode(unsigned char *buffer, int size, int DecodeKey)
-{
-	if ((size >= 2) && buffer[1]!=0x01 && buffer[0]!=0x02 && buffer[0]!=0x1d) {
-		int Key=DecodeKey;
-		unsigned char *test=(unsigned char *)malloc(size);
-		buffer+=2;
-		size-=2;
-
-		int i;
-		for (i = 0 ; i+4 <= size ; i+=4)
-		{
-			int pt = (*(int*)&buffer[i])^(Key);
-			Key = (*(int*)&buffer[i]);
-			*(int*)&test[i]=pt;
-		}
-		unsigned char KC=Key&0xFF;
-		for ( ; i < size ; i++)
-		{
-			test[i]=buffer[i]^KC;
-		}
-		memcpy(buffer,test,size);
-		free(test);
-	}
-}
-
-void EQProtocolPacket::ChatEncode(unsigned char *buffer, int size, int EncodeKey)
-{
-	if (buffer[1]!=0x01 && buffer[0]!=0x02 && buffer[0]!=0x1d) {
-		int Key=EncodeKey;
-		char *test=(char*)malloc(size);
-		int i;
-		buffer+=2;
-		size-=2;
-		for ( i = 0 ; i+4 <= size ; i+=4)
-		{
-			int pt = (*(int*)&buffer[i])^(Key);
-			Key = pt;
-			*(int*)&test[i]=pt;
-		}
-		unsigned char KC=Key&0xFF;
-		for ( ; i < size ; i++)
-		{
-			test[i]=buffer[i]^KC;
-		}
-		memcpy(buffer,test,size);
-		free(test);
-	}
 }
 
 EQApplicationPacket *EQApplicationPacket::Copy() const {
@@ -502,17 +370,16 @@ EQRawApplicationPacket::EQRawApplicationPacket(const unsigned char *buf, const u
 	}
 }
 
-void DumpPacket(const EQApplicationPacket* app, bool iShowInfo) {
+void DumpPacket(const EQApplicationPacket* app, bool iShowInfo)
+{
 	if (iShowInfo) {
-		std::cout << "Dumping Applayer: 0x" << std::hex << std::setfill('0') << std::setw(4) << app->GetOpcode() << std::dec;
-		std::cout << " size:" << app->size << std::endl;
+		printf("Dumping Applayer: 0x%04x size: %u", app->GetOpcode(), app->size);
 	}
+
 	DumpPacketHex(app->pBuffer, app->size);
-//	DumpPacketAscii(app->pBuffer, app->size);
 }
 
-std::string DumpPacketToString(const EQApplicationPacket* app){
-	std::ostringstream out;
-	out << DumpPacketHexToString(app->pBuffer, app->size);
-	return out.str();
+std::string DumpPacketToString(const EQApplicationPacket* app)
+{
+	return DumpPacketHexToString(app->pBuffer, app->size);
 }

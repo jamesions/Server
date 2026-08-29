@@ -1,12 +1,31 @@
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
+
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 #ifdef LUA_EQEMU
 
-#include "lua.hpp"
-#include <luabind/luabind.hpp>
-
-#include "masterentity.h"
 #include "lua_inventory.h"
-#include "lua_iteminst.h"
-#include "lua_item.h"
+
+#include "zone/lua_item.h"
+#include "zone/lua_iteminst.h"
+#include "zone/masterentity.h"
+
+#include "lua.hpp"
+#include "luabind/luabind.hpp"
+
 
 Lua_ItemInst Lua_Inventory::GetItem(int slot_id) {
 	Lua_Safe_Call_Class(Lua_ItemInst);
@@ -20,7 +39,7 @@ Lua_ItemInst Lua_Inventory::GetItem(int slot_id, int bag_slot) {
 
 int Lua_Inventory::PutItem(int slot_id, Lua_ItemInst item) {
 	Lua_Safe_Call_Int();
-	EQEmu::ItemInstance *inst = item;
+	EQ::ItemInstance *inst = item;
 	if(!inst) {
 		return 0;
 	}
@@ -30,7 +49,7 @@ int Lua_Inventory::PutItem(int slot_id, Lua_ItemInst item) {
 
 int Lua_Inventory::PushCursor(Lua_ItemInst item) {
 	Lua_Safe_Call_Int();
-	EQEmu::ItemInstance *inst = item;
+	EQ::ItemInstance *inst = item;
 	if(!inst) {
 		return 0;
 	}
@@ -38,9 +57,10 @@ int Lua_Inventory::PushCursor(Lua_ItemInst item) {
 	return self->PushCursor(*inst);
 }
 
-bool Lua_Inventory::SwapItem(int slot_a, int slot_b) {
+bool Lua_Inventory::SwapItem(int source_slot, int destination_slot) {
 	Lua_Safe_Call_Bool();
-	return self->SwapItem(slot_a, slot_b);
+	EQ::InventoryProfile::SwapItemFailState fail_state = EQ::InventoryProfile::swapInvalid;
+	return self->SwapItem(source_slot, destination_slot, fail_state);
 }
 
 bool Lua_Inventory::DeleteItem(int slot_id) {
@@ -163,38 +183,77 @@ int Lua_Inventory::GetSlotByItemInst(Lua_ItemInst inst) {
 	return self->GetSlotByItemInst(inst);
 }
 
-luabind::scope lua_register_inventory() {
-	return luabind::class_<Lua_Inventory>("Inventory")
-		.def(luabind::constructor<>())
-		.def("GetItem", (Lua_ItemInst(Lua_Inventory::*)(int))&Lua_Inventory::GetItem)
-		.def("GetItem", (Lua_ItemInst(Lua_Inventory::*)(int,int))&Lua_Inventory::GetItem)
-		.def("PutItem", (int(Lua_Inventory::*)(int,Lua_ItemInst))&Lua_Inventory::PutItem)
-		.def("PushCursor", (int(Lua_Inventory::*)(Lua_ItemInst))&Lua_Inventory::PushCursor)
-		.def("SwapItem", (bool(Lua_Inventory::*)(int,int))&Lua_Inventory::SwapItem)
-		.def("DeleteItem", (bool(Lua_Inventory::*)(int))&Lua_Inventory::DeleteItem)
-		.def("DeleteItem", (bool(Lua_Inventory::*)(int,int))&Lua_Inventory::DeleteItem)
-		.def("CheckNoDrop", (bool(Lua_Inventory::*)(int))&Lua_Inventory::CheckNoDrop)
-		.def("PopItem", (Lua_ItemInst(Lua_Inventory::*)(int))&Lua_Inventory::PopItem)
-		.def("HasItem", (int(Lua_Inventory::*)(int))&Lua_Inventory::HasItem)
-		.def("HasItem", (int(Lua_Inventory::*)(int,int))&Lua_Inventory::HasItem)
-		.def("HasItem", (int(Lua_Inventory::*)(int,int,int))&Lua_Inventory::HasItem)
-		.def("HasSpaceForItem", (bool(Lua_Inventory::*)(Lua_Item,int))&Lua_Inventory::HasSpaceForItem)
-		.def("HasItemByUse", (int(Lua_Inventory::*)(int))&Lua_Inventory::HasItemByUse)
-		.def("HasItemByUse", (int(Lua_Inventory::*)(int,uint8))&Lua_Inventory::HasItemByUse)
-		.def("HasItemByUse", (int(Lua_Inventory::*)(int,uint8,uint8))&Lua_Inventory::HasItemByUse)
-		.def("HasItemByLoreGroup", (int(Lua_Inventory::*)(uint32))&Lua_Inventory::HasItemByLoreGroup)
-		.def("HasItemByLoreGroup", (int(Lua_Inventory::*)(uint32,int))&Lua_Inventory::HasItemByLoreGroup)
-		.def("FindFreeSlot", (int(Lua_Inventory::*)(bool,bool))&Lua_Inventory::FindFreeSlot)
-		.def("FindFreeSlot", (int(Lua_Inventory::*)(bool,bool,int))&Lua_Inventory::FindFreeSlot)
-		.def("FindFreeSlot", (int(Lua_Inventory::*)(bool,bool,int,bool))&Lua_Inventory::FindFreeSlot)
-		.def("CalcSlotId", (int(Lua_Inventory::*)(int))&Lua_Inventory::CalcSlotId)
-		.def("CalcSlotId", (int(Lua_Inventory::*)(int,int))&Lua_Inventory::CalcSlotId)
-		.def("CalcBagIdx", (int(Lua_Inventory::*)(int))&Lua_Inventory::CalcBagIdx)
-		.def("CalcSlotFromMaterial", (int(Lua_Inventory::*)(int))&Lua_Inventory::CalcSlotFromMaterial)
-		.def("CalcMaterialFromSlot", (int(Lua_Inventory::*)(int))&Lua_Inventory::CalcMaterialFromSlot)
-		.def("CanItemFitInContainer", (bool(Lua_Inventory::*)(Lua_Item,Lua_Item))&Lua_Inventory::CanItemFitInContainer)
-		.def("SupportsContainers", (bool(Lua_Inventory::*)(int))&Lua_Inventory::SupportsContainers)
-		.def("GetSlotByItemInst", (int(Lua_Inventory::*)(Lua_ItemInst))&Lua_Inventory::GetSlotByItemInst);
+uint32 Lua_Inventory::CountAugmentEquippedByID(uint32 item_id) {
+	Lua_Safe_Call_Int();
+	return self->CountAugmentEquippedByID(item_id);
 }
 
-#endif
+bool Lua_Inventory::HasAugmentEquippedByID(uint32 item_id) {
+	Lua_Safe_Call_Bool();
+	return self->HasAugmentEquippedByID(item_id);
+}
+
+uint32 Lua_Inventory::CountItemEquippedByID(uint32 item_id) {
+	Lua_Safe_Call_Int();
+	return self->CountItemEquippedByID(item_id);
+}
+
+bool Lua_Inventory::HasItemEquippedByID(uint32 item_id) {
+	Lua_Safe_Call_Bool();
+	return self->HasItemEquippedByID(item_id);
+}
+
+luabind::object Lua_Inventory::GetAugmentIDsBySlotID(lua_State* L, int16 slot_id) {
+	auto lua_table = luabind::newtable(L);
+	if (d_) {
+		auto self = reinterpret_cast<NativeType*>(d_);
+		auto augments = self->GetAugmentIDsBySlotID(slot_id);
+		int index = 1;
+		for (auto item_id : augments) {
+			lua_table[index] = item_id;
+			index++;
+		}
+	}
+	return lua_table;
+}
+
+luabind::scope lua_register_inventory() {
+	return luabind::class_<Lua_Inventory>("Inventory")
+	.def(luabind::constructor<>())
+	.def("CalcBagIdx", (int(Lua_Inventory::*)(int))&Lua_Inventory::CalcBagIdx)
+	.def("CalcMaterialFromSlot", (int(Lua_Inventory::*)(int))&Lua_Inventory::CalcMaterialFromSlot)
+	.def("CalcSlotFromMaterial", (int(Lua_Inventory::*)(int))&Lua_Inventory::CalcSlotFromMaterial)
+	.def("CalcSlotId", (int(Lua_Inventory::*)(int))&Lua_Inventory::CalcSlotId)
+	.def("CalcSlotId", (int(Lua_Inventory::*)(int,int))&Lua_Inventory::CalcSlotId)
+	.def("CanItemFitInContainer", (bool(Lua_Inventory::*)(Lua_Item,Lua_Item))&Lua_Inventory::CanItemFitInContainer)
+	.def("CheckNoDrop", (bool(Lua_Inventory::*)(int))&Lua_Inventory::CheckNoDrop)
+	.def("CountAugmentEquippedByID", (uint32(Lua_Inventory::*)(uint32))&Lua_Inventory::CountAugmentEquippedByID)
+	.def("CountItemEquippedByID", (uint32(Lua_Inventory::*)(uint32))&Lua_Inventory::CountItemEquippedByID)
+	.def("DeleteItem", (bool(Lua_Inventory::*)(int))&Lua_Inventory::DeleteItem)
+	.def("DeleteItem", (bool(Lua_Inventory::*)(int,int))&Lua_Inventory::DeleteItem)
+	.def("FindFreeSlot", (int(Lua_Inventory::*)(bool,bool))&Lua_Inventory::FindFreeSlot)
+	.def("FindFreeSlot", (int(Lua_Inventory::*)(bool,bool,int))&Lua_Inventory::FindFreeSlot)
+	.def("FindFreeSlot", (int(Lua_Inventory::*)(bool,bool,int,bool))&Lua_Inventory::FindFreeSlot)
+	.def("GetAugmentIDsBySlotID", (luabind::object(Lua_Inventory::*)(lua_State* L,int16))&Lua_Inventory::GetAugmentIDsBySlotID)
+	.def("GetItem", (Lua_ItemInst(Lua_Inventory::*)(int))&Lua_Inventory::GetItem)
+	.def("GetItem", (Lua_ItemInst(Lua_Inventory::*)(int,int))&Lua_Inventory::GetItem)
+	.def("GetSlotByItemInst", (int(Lua_Inventory::*)(Lua_ItemInst))&Lua_Inventory::GetSlotByItemInst)
+	.def("HasAugmentEquippedByID", (bool(Lua_Inventory::*)(uint32))&Lua_Inventory::HasAugmentEquippedByID)
+	.def("HasItem", (int(Lua_Inventory::*)(int))&Lua_Inventory::HasItem)
+	.def("HasItem", (int(Lua_Inventory::*)(int,int))&Lua_Inventory::HasItem)
+	.def("HasItem", (int(Lua_Inventory::*)(int,int,int))&Lua_Inventory::HasItem)
+	.def("HasItemByLoreGroup", (int(Lua_Inventory::*)(uint32))&Lua_Inventory::HasItemByLoreGroup)
+	.def("HasItemByLoreGroup", (int(Lua_Inventory::*)(uint32,int))&Lua_Inventory::HasItemByLoreGroup)
+	.def("HasItemByUse", (int(Lua_Inventory::*)(int))&Lua_Inventory::HasItemByUse)
+	.def("HasItemByUse", (int(Lua_Inventory::*)(int,uint8))&Lua_Inventory::HasItemByUse)
+	.def("HasItemByUse", (int(Lua_Inventory::*)(int,uint8,uint8))&Lua_Inventory::HasItemByUse)
+	.def("HasItemEquippedByID", (bool(Lua_Inventory::*)(uint32))&Lua_Inventory::HasItemEquippedByID)
+	.def("HasSpaceForItem", (bool(Lua_Inventory::*)(Lua_Item,int))&Lua_Inventory::HasSpaceForItem)
+	.def("PopItem", (Lua_ItemInst(Lua_Inventory::*)(int))&Lua_Inventory::PopItem)
+	.def("PushCursor", (int(Lua_Inventory::*)(Lua_ItemInst))&Lua_Inventory::PushCursor)
+	.def("PutItem", (int(Lua_Inventory::*)(int,Lua_ItemInst))&Lua_Inventory::PutItem)
+	.def("SupportsContainers", (bool(Lua_Inventory::*)(int))&Lua_Inventory::SupportsContainers)
+	.def("SwapItem", (bool(Lua_Inventory::*)(int,int))&Lua_Inventory::SwapItem);
+}
+
+#endif // LUA_EQEMU

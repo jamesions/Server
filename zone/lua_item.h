@@ -1,10 +1,28 @@
-#ifndef EQEMU_LUA_ITEM_H
-#define EQEMU_LUA_ITEM_H
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
+
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
+*/
+#pragma once
+
 #ifdef LUA_EQEMU
 
-#include "lua_ptr.h"
+#include "common/types.h"
+#include "zone/lua_ptr.h"
 
-namespace EQEmu
+namespace EQ
 {
 	struct ItemData;
 }
@@ -15,23 +33,24 @@ namespace luabind {
 
 luabind::scope lua_register_item();
 
-class Lua_Item : public Lua_Ptr<const EQEmu::ItemData>
+class Lua_Item : public Lua_Ptr<const EQ::ItemData>
 {
-	typedef const EQEmu::ItemData NativeType;
+	typedef const EQ::ItemData NativeType;
 public:
 	Lua_Item(uint32 item_id);
 	Lua_Item() : Lua_Ptr(nullptr) { }
-	Lua_Item(const EQEmu::ItemData *d) : Lua_Ptr(d) { }
+	Lua_Item(const EQ::ItemData *d) : Lua_Ptr(d) { }
 	virtual ~Lua_Item() { }
 
-	operator const EQEmu::ItemData*() {
-		return reinterpret_cast<const EQEmu::ItemData*>(GetLuaPtrData());
+	operator const EQ::ItemData*() {
+		return reinterpret_cast<const EQ::ItemData*>(GetLuaPtrData());
 	}
 
 	int GetMinStatus();
 	int GetItemClass();
 	const char *GetName();
 	const char *GetLore();
+	const char *GetComment();
 	const char *GetIDFile();
 	uint32 GetID();
 	int GetWeight();
@@ -41,7 +60,7 @@ public:
 	uint32 GetSlots();
 	uint32 GetPrice();
 	uint32 GetIcon();
-	uint32 GetLoreGroup();
+	int32 GetLoreGroup();
 	bool GetLoreFlag();
 	bool GetPendingLoreFlag();
 	bool GetArtifactFlag();
@@ -121,22 +140,22 @@ public:
 	int GetFactionAmt4();
 	const char *GetCharmFile();
 	uint32 GetAugType();
-	int GetAugSlotType(int i);
-	int GetAugSlotVisible(int i);
-	int GetAugSlotUnk2(int i);
+	int GetAugSlotType(uint8 slot_id);
+	int GetAugSlotVisible(uint8 slot_id);
+	int GetAugSlotUnk2(uint8 slot_id);
 	uint32 GetLDoNTheme();
 	uint32 GetLDoNPrice();
 	uint32 GetLDoNSold();
 	uint32 GetBaneDmgRaceAmt();
 	uint32 GetAugRestrict();
-	uint32 GetEndur();
-	uint32 GetDotShielding();
-	uint32 GetAttack();
-	uint32 GetRegen();
-	uint32 GetManaRegen();
-	uint32 GetEnduranceRegen();
-	uint32 GetHaste();
-	uint32 GetDamageShield();
+	int32 GetEndur();
+	int32 GetDotShielding();
+	int32 GetAttack();
+	int32 GetRegen();
+	int32 GetManaRegen();
+	int32 GetEnduranceRegen();
+	int32 GetHaste();
+	int32 GetDamageShield();
 	uint32 GetRecastDelay();
 	uint32 GetRecastType();
 	uint32 GetAugDistiller();
@@ -205,5 +224,4 @@ public:
 	const char *GetScrollName();
 };
 
-#endif
-#endif
+#endif // LUA_EQEMU

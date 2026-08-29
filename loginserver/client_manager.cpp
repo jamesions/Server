@@ -1,208 +1,286 @@
-/*	EQEMu: Everquest Server Emulator
-	Copyright (C) 2001-2010 EQEMu Development Team (http://eqemulator.net)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
 #include "client_manager.h"
-#include "login_server.h"
+
+#include "common/file.h"
+#include "common/misc.h"
+#include "common/path_manager.h"
+#include "loginserver/login_server.h"
 
 extern LoginServer server;
-extern bool run_server;
+extern bool        run_server;
 
-#include "../common/eqemu_logsys.h"
-extern EQEmuLogSys Log;
+void CheckTitaniumOpcodeFile(const std::string &path)
+{
+	if (File::Exists(path)) {
+		return;
+	}
+
+	auto f = fopen(path.c_str(), "w");
+	if (f) {
+		fprintf(f, "#EQEmu Public Login Server OPCodes\n");
+		fprintf(f, "OP_SessionReady=0x0001\n");
+		fprintf(f, "OP_Login=0x0002\n");
+		fprintf(f, "OP_ServerListRequest=0x0004\n");
+		fprintf(f, "OP_PlayEverquestRequest=0x000d\n");
+		fprintf(f, "OP_PlayEverquestResponse=0x0021\n");
+		fprintf(f, "OP_ChatMessage=0x0016\n");
+		fprintf(f, "OP_LoginAccepted=0x0017\n");
+		fprintf(f, "OP_ServerListResponse=0x0018\n");
+		fprintf(f, "OP_Poll=0x0029\n");
+		fprintf(f, "OP_EnterChat=0x000f\n");
+		fprintf(f, "OP_PollResponse=0x0011\n");
+		fclose(f);
+	}
+}
+
+void CheckSoDOpcodeFile(const std::string &path)
+{
+	if (File::Exists(path)) {
+		return;
+	}
+
+	auto f = fopen(path.c_str(), "w");
+	if (f) {
+		fprintf(f, "#EQEmu Public Login Server OPCodes\n");
+		fprintf(f, "OP_SessionReady=0x0001\n");
+		fprintf(f, "OP_Login=0x0002\n");
+		fprintf(f, "OP_ServerListRequest=0x0004\n");
+		fprintf(f, "OP_PlayEverquestRequest=0x000d\n");
+		fprintf(f, "OP_PlayEverquestResponse=0x0022\n");
+		fprintf(f, "OP_ChatMessage=0x0017\n");
+		fprintf(f, "OP_LoginAccepted=0x0018\n");
+		fprintf(f, "OP_ServerListResponse=0x0019\n");
+		fprintf(f, "OP_Poll=0x0029\n");
+		fprintf(f, "OP_LoginExpansionPacketData=0x0031\n");
+		fprintf(f, "OP_EnterChat=0x000f\n");
+		fprintf(f, "OP_PollResponse=0x0011\n");
+		fclose(f);
+	}
+}
+
+void CheckLarionOpcodeFile(const std::string &path)
+{
+	if (File::Exists(path)) {
+		return;
+	}
+
+	auto f = fopen(path.c_str(), "w");
+	if (f) {
+		fprintf(f, "#EQEmu Public Login Server OPCodes\n");
+		fprintf(f, "OP_SessionReady=0x0001\n");
+		fprintf(f, "OP_Login=0x0002\n");
+		fprintf(f, "OP_ServerListRequest=0x0004\n");
+		fprintf(f, "OP_PlayEverquestRequest=0x000d\n");
+		fprintf(f, "OP_PlayEverquestResponse=0x0022\n");
+		fprintf(f, "OP_ChatMessage=0x0017\n");
+		fprintf(f, "OP_LoginAccepted=0x0018\n");
+		fprintf(f, "OP_ServerListResponse=0x0019\n");
+		fprintf(f, "OP_Poll=0x0029\n");
+		fprintf(f, "OP_EnterChat=0x000f\n");
+		fprintf(f, "OP_PollResponse=0x0011\n");
+		fprintf(f, "OP_SystemFingerprint=0x0016\n");
+		fprintf(f, "OP_ExpansionList=0x0030\n");
+		fclose(f);
+	}
+}
 
 ClientManager::ClientManager()
 {
-	int titanium_port = atoi(server.config->GetVariable("Titanium", "port").c_str());
-	titanium_stream = new EQStreamFactory(LoginStream, titanium_port);
-	titanium_ops = new RegularOpcodeManager;
-	if(!titanium_ops->LoadOpcodes(server.config->GetVariable("Titanium", "opcodes").c_str()))
-	{
-		Log.Out(Logs::General, Logs::Error, "ClientManager fatal error: couldn't load opcodes for Titanium file %s.",
-			server.config->GetVariable("Titanium", "opcodes").c_str());
+	int titanium_port = server.config.GetVariableInt("client_configuration", "titanium_port", 5998);
+
+	EQStreamManagerInterfaceOptions titanium_opts(titanium_port, false, false);
+
+	m_titanium_stream = new EQ::Net::EQStreamManager(titanium_opts);
+	m_titanium_ops    = new RegularOpcodeManager;
+
+	std::string opcodes_path = fmt::format(
+		"{}/{}",
+		PathManager::Instance()->GetOpcodePath(),
+		"login_opcodes.conf"
+	);
+
+	CheckTitaniumOpcodeFile(opcodes_path);
+
+	if (!m_titanium_ops->LoadOpcodes(opcodes_path.c_str())) {
+		LogError(
+			"ClientManager fatal error: couldn't load opcodes for Titanium file [{}]",
+			server.config.GetVariableString("client_configuration", "titanium_opcodes", "login_opcodes.conf")
+		);
+
 		run_server = false;
 	}
 
-	if(titanium_stream->Open())
-	{
-		Log.Out(Logs::General, Logs::Login_Server, "ClientManager listening on Titanium stream.");
-	}
-	else
-	{
-		Log.Out(Logs::General, Logs::Error, "ClientManager fatal error: couldn't open Titanium stream.");
+	m_titanium_stream->OnNewConnection(
+		[this](std::shared_ptr<EQ::Net::EQStream> stream) {
+			LogInfo(
+				"New Titanium client connection from [{}:{}]",
+				long2ip(stream->GetRemoteIP()),
+				stream->GetRemotePort()
+			);
+
+			stream->SetOpcodeManager(&m_titanium_ops);
+			Client *c = new Client(stream, cv_titanium);
+			m_clients.push_back(c);
+		}
+	);
+
+	int sod_port = server.config.GetVariableInt("client_configuration", "sod_port", 5999);
+
+	EQStreamManagerInterfaceOptions sod_opts(sod_port, false, false);
+	m_sod_stream = new EQ::Net::EQStreamManager(sod_opts);
+	m_sod_ops    = new RegularOpcodeManager;
+
+	opcodes_path = fmt::format(
+		"{}/{}",
+		PathManager::Instance()->GetOpcodePath(),
+		"login_opcodes_sod.conf"
+	);
+
+	CheckSoDOpcodeFile(opcodes_path);
+
+	if (!m_sod_ops->LoadOpcodes(opcodes_path.c_str())) {
+		LogError(
+			"ClientManager fatal error: couldn't load opcodes for SoD file {}",
+			server.config.GetVariableString("client_configuration", "sod_opcodes", "login_opcodes.conf").c_str()
+		);
+
 		run_server = false;
 	}
 
-	int sod_port = atoi(server.config->GetVariable("SoD", "port").c_str());
-	sod_stream = new EQStreamFactory(LoginStream, sod_port);
-	sod_ops = new RegularOpcodeManager;
-	if(!sod_ops->LoadOpcodes(server.config->GetVariable("SoD", "opcodes").c_str()))
-	{
-		Log.Out(Logs::General, Logs::Error, "ClientManager fatal error: couldn't load opcodes for SoD file %s.",
-			server.config->GetVariable("SoD", "opcodes").c_str());
+	m_sod_stream->OnNewConnection(
+		[this](std::shared_ptr<EQ::Net::EQStream> stream) {
+			LogInfo(
+				"New SoD+ client connection from [{}:{}]",
+				long2ip(stream->GetRemoteIP()),
+				stream->GetRemotePort()
+			);
+
+			stream->SetOpcodeManager(&m_sod_ops);
+			auto *c = new Client(stream, cv_sod);
+			m_clients.push_back(c);
+		}
+	);
+
+	int larion_port = server.config.GetVariableInt("client_configuration", "larion_port", 15900);
+
+	EQStreamManagerInterfaceOptions larion_opts(larion_port, false, false);
+
+	m_larion_stream = new EQ::Net::EQStreamManager(larion_opts);
+	m_larion_ops    = new RegularOpcodeManager;
+
+	opcodes_path = fmt::format(
+		"{}/{}",
+		PathManager::Instance()->GetOpcodePath(),
+		"login_opcodes_larion.conf"
+	);
+
+	CheckLarionOpcodeFile(opcodes_path);
+
+	if (!m_larion_ops->LoadOpcodes(opcodes_path.c_str())) {
+		LogError(
+			"ClientManager fatal error: couldn't load opcodes for Larion file [{}]",
+			server.config.GetVariableString("client_configuration", "larion_opcodes", "login_opcodes.conf")
+		);
+
 		run_server = false;
 	}
 
-	if(sod_stream->Open())
-	{
-		Log.Out(Logs::General, Logs::Login_Server, "ClientManager listening on SoD stream.");
-	}
-	else
-	{
-		Log.Out(Logs::General, Logs::Error, "ClientManager fatal error: couldn't open SoD stream.");
-		run_server = false;
-	}
+	m_larion_stream->OnNewConnection(
+		[this](std::shared_ptr<EQ::Net::EQStream> stream) {
+			LogInfo(
+				"New Larion client connection from [{}:{}]",
+				long2ip(stream->GetRemoteIP()),
+				stream->GetRemotePort()
+			);
+
+			stream->SetOpcodeManager(&m_larion_ops);
+			Client *c = new Client(stream, cv_larion);
+			m_clients.push_back(c);
+		}
+	);
 }
 
 ClientManager::~ClientManager()
 {
-	if(titanium_stream)
-	{
-		titanium_stream->Close();
-		delete titanium_stream;
-	}
-
-	if(titanium_ops)
-	{
-		delete titanium_ops;
-	}
-
-	if(sod_stream)
-	{
-		sod_stream->Close();
-		delete sod_stream;
-	}
-
-	if(sod_ops)
-	{
-		delete sod_ops;
-	}
+	delete m_titanium_stream;
+	delete m_titanium_ops;
+	delete m_sod_stream;
+	delete m_sod_ops;
 }
 
 void ClientManager::Process()
 {
 	ProcessDisconnect();
-	std::shared_ptr<EQStream> cur = titanium_stream->Pop();
-	while(cur)
-	{
-		struct in_addr in;
-		in.s_addr = cur->GetRemoteIP();
-		Log.Out(Logs::General, Logs::Login_Server, "New Titanium client connection from %s:%d", inet_ntoa(in), ntohs(cur->GetRemotePort()));
 
-		cur->SetOpcodeManager(&titanium_ops);
-		Client *c = new Client(cur, cv_titanium);
-		clients.push_back(c);
-		cur = titanium_stream->Pop();
-	}
-
-	cur = sod_stream->Pop();
-	while(cur)
-	{
-		struct in_addr in;
-		in.s_addr = cur->GetRemoteIP();
-		Log.Out(Logs::General, Logs::Login_Server, "New SoD client connection from %s:%d", inet_ntoa(in), ntohs(cur->GetRemotePort()));
-
-		cur->SetOpcodeManager(&sod_ops);
-		Client *c = new Client(cur, cv_sod);
-		clients.push_back(c);
-		cur = sod_stream->Pop();
-	}
-
-	list<Client*>::iterator iter = clients.begin();
-	while(iter != clients.end())
-	{
-		if((*iter)->Process() == false)
-		{
-			Log.Out(Logs::General, Logs::Debug, "Client had a fatal error and had to be removed from the login.");
-			delete (*iter);
-			iter = clients.erase(iter);
+	for (auto it = m_clients.begin(); it != m_clients.end();) {
+		Client *c = *it;
+		if (!c->Process()) {
+			LogWarning("Client had a fatal error and had to be removed from the login");
+			delete c;
+			it = m_clients.erase(it);
 		}
-		else
-		{
-			++iter;
+		else {
+			++it;
 		}
 	}
 }
 
 void ClientManager::ProcessDisconnect()
 {
-	list<Client*>::iterator iter = clients.begin();
-	while(iter != clients.end())
-	{
-		std::shared_ptr<EQStream> c = (*iter)->GetConnection();
-		if(c->CheckClosed())
-		{
-			Log.Out(Logs::General, Logs::Login_Server, "Client disconnected from the server, removing client.");
-			delete (*iter);
-			iter = clients.erase(iter);
+	auto it = m_clients.begin();
+	while (it != m_clients.end()) {
+		Client *c = *it;
+		if (c->GetConnection()->CheckState(CLOSED)) {
+			LogInfo("Client disconnected from the server, removing client");
+			delete c;
+			it = m_clients.erase(it);
 		}
-		else
-		{
-			++iter;
+		else {
+			++it;
 		}
 	}
 }
 
-void ClientManager::UpdateServerList()
+void ClientManager::RemoveExistingClient(unsigned int account_id, const std::string &loginserver)
 {
-	list<Client*>::iterator iter = clients.begin();
-	while(iter != clients.end())
-	{
-		(*iter)->SendServerListPacket();
-		++iter;
+	auto it = m_clients.begin();
+	while (it != m_clients.end()) {
+		Client *c = *it;
+		if (c->GetAccountID() == account_id && c->GetLoginServerName() == loginserver) {
+			LogInfo("Client attempting to log in existing client already logged in, removing existing client");
+			delete c;
+			it = m_clients.erase(it);
+		}
+		else {
+			++it;
+		}
 	}
 }
 
-void ClientManager::RemoveExistingClient(unsigned int account_id)
+Client *ClientManager::GetClient(unsigned int account_id, const std::string &loginserver)
 {
-	list<Client*>::iterator iter = clients.begin();
-	while(iter != clients.end())
-	{
-		if((*iter)->GetAccountID() == account_id)
-		{
-			Log.Out(Logs::General, Logs::Login_Server, "Client attempting to log in and existing client already logged in, removing existing client.");
-			delete (*iter);
-			iter = clients.erase(iter);
+	auto iter = std::find_if(
+		m_clients.begin(), m_clients.end(),
+		[&](Client *c) {
+			return c->GetAccountID() == account_id && c->GetLoginServerName() == loginserver;
 		}
-		else
-		{
-			++iter;
-		}
-	}
+	);
+
+	return (iter != m_clients.end()) ? *iter : nullptr;
 }
-
-Client *ClientManager::GetClient(unsigned int account_id)
-{
-	Client *cur = nullptr;
-	int count = 0;
-	list<Client*>::iterator iter = clients.begin();
-	while(iter != clients.end())
-	{
-		if((*iter)->GetAccountID() == account_id)
-		{
-			cur = (*iter);
-			count++;
-		}
-		++iter;
-	}
-
-	if(count > 1)
-	{
-		Log.Out(Logs::General, Logs::Error, "More than one client with a given account_id existed in the client list.");
-	}
-	return cur;
-}
-

@@ -1,176 +1,71 @@
-/*	EQEMu: Everquest Server Emulator
-	Copyright (C) 2001-2010 EQEMu Development Team (http://eqemulator.net)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
-#ifndef EQEMU_OPTIONS_H
-#define EQEMU_OPTIONS_H
+#pragma once
 
-/**
- * Collects options on one object, because having a bunch of global variables floating around is
- * really ugly and just a little dangerous.
- */
-class Options
-{
+#include <string>
+
+class Options {
 public:
-	/**
-	* Constructor, sets the default options.
-	*/
 	Options() :
-		allow_unregistered(true),
-		trace(false),
-		dump_in_packets(false),
-		dump_out_packets(false),
-		encryption_mode(5),
-		local_network("127.0.0.1"),
-		reject_duplicate_servers(false) { }
+		m_allow_unregistered(true),
+		m_display_expansions(false),
+		m_max_expansions_mask(0),
+		m_encryption_mode(14),
+		m_reject_duplicate_servers(false),
+		m_allow_token_login(false),
+		m_auto_create_accounts(false) {}
 
-	/**
-	* Sets allow_unregistered.
-	*/
-	inline void AllowUnregistered(bool b) { allow_unregistered = b; }
-
-	/**
-	* Returns the value of allow_unregistered.
-	*/
-	inline bool IsUnregisteredAllowed() const { return allow_unregistered; }
-
-	/**
-	* Sets trace.
-	*/
-	inline void Trace(bool b) { trace = b; }
-
-	/**
-	* Returns the value of trace.
-	*/
-	inline bool IsTraceOn() const { return trace; }
-
-	/**
-	* Sets trace.
-	*/
-	inline void WorldTrace(bool b) { world_trace = b; }
-
-	/**
-	* Returns the value of trace.
-	*/
-	inline bool IsWorldTraceOn() const { return world_trace; }
-
-	/**
-	* Sets dump_in_packets.
-	*/
-	inline void DumpInPackets(bool b) { dump_in_packets = b; }
-
-	/**
-	* Returns the value of dump_in_packets.
-	*/
-	inline bool IsDumpInPacketsOn() const { return dump_in_packets; }
-
-	/**
-	* Sets dump_out_packets.
-	*/
-	inline void DumpOutPackets(bool b) { dump_out_packets = b; }
-
-	/**
-	* Returns the value of dump_out_packets.
-	*/
-	inline bool IsDumpOutPacketsOn() const { return dump_out_packets; }
-
-	/**
-	* Sets encryption_mode.
-	*/
-	inline void EncryptionMode(int m) { encryption_mode = m; }
-
-	/**
-	* Returns the value of encryption_mode.
-	*/
-	inline int GetEncryptionMode() const { return encryption_mode; }
-
-	/**
-	* Sets local_network.
-	*/
-	inline void LocalNetwork(std::string n) { local_network = n; }
-
-	/**
-	* Return the value of local_network.
-	*/
-	inline std::string GetLocalNetwork() const { return local_network; }
-
-	/**
-	* Sets account table.
-	*/
-	inline void AccountTable(std::string t) { account_table = t; }
-
-	/**
-	* Return the value of local_network.
-	*/
-	inline std::string GetAccountTable() const { return account_table; }
-
-	/**
-	* Sets world account table.
-	*/
-	inline void WorldRegistrationTable(std::string t) { world_registration_table = t; }
-
-	/**
-	* Return the value of world account table.
-	*/
-	inline std::string GetWorldRegistrationTable() const { return world_registration_table; }
-
-	/**
-	* Sets world admin account table.
-	*/
-	inline void WorldAdminRegistrationTable(std::string t) { world_admin_registration_table = t; }
-
-	/**
-	* Return the value of world admin account table.
-	*/
-	inline std::string GetWorldAdminRegistrationTable() const { return world_admin_registration_table; }
-
-	/**
-	* Sets world server type table.
-	*/
-	inline void WorldServerTypeTable(std::string t) { world_server_type_table = t; }
-
-	/**
-	* Return the value of world admin account table.
-	*/
-	inline std::string GetWorldServerTypeTable() const { return world_server_type_table; }
-
-	/**
-	* Sets whether we are rejecting duplicate servers or not.
-	*/
-	inline void RejectDuplicateServers(bool b) { reject_duplicate_servers = b; }
-
-	/**
-	* Returns whether we are rejecting duplicate servers or not.
-	*/
-	inline bool IsRejectingDuplicateServers() { return reject_duplicate_servers; }
+	inline void AllowUnregistered(bool b) { m_allow_unregistered = b; }
+	inline void DisplayExpansions(bool b) { m_display_expansions = b; }
+	inline void MaxExpansions(int i) { m_max_expansions_mask = i; }
+	inline bool IsDisplayExpansions() const { return m_display_expansions; }
+	inline int GetMaxExpansions() const { return m_max_expansions_mask; }
+	inline bool IsUnregisteredAllowed() const { return m_allow_unregistered; }
+	inline void EncryptionMode(int m) { m_encryption_mode = m; }
+	inline int GetEncryptionMode() const { return m_encryption_mode; }
+	inline void RejectDuplicateServers(bool b) { m_reject_duplicate_servers = b; }
+	inline bool IsRejectingDuplicateServers() { return m_reject_duplicate_servers; }
+	inline void AllowTokenLogin(bool b) { m_allow_token_login = b; }
+	inline bool IsTokenLoginAllowed() const { return m_allow_token_login; }
+	inline void AutoCreateAccounts(bool b) { m_auto_create_accounts = b; }
+	inline bool CanAutoCreateAccounts() const { return m_auto_create_accounts; }
+	inline void EQEmuLoginServerAddress(const std::string &v) { m_eqemu_loginserver_address = v; }
+	inline std::string GetEQEmuLoginServerAddress() const { return m_eqemu_loginserver_address; }
+	inline void DefaultLoginServerName(const std::string &v) { m_default_loginserver_name = v; }
+	inline std::string GetDefaultLoginServerName() const { return m_default_loginserver_name; }
+	inline bool IsShowPlayerCountEnabled() const { return m_show_player_count; }
+	inline void SetShowPlayerCount(bool show_player_count) { m_show_player_count = show_player_count; }
+	inline bool IsWorldDevTestServersListBottom() const { return m_world_dev_list_bottom; }
+	inline void SetWorldDevTestServersListBottom(bool list_bottom) { m_world_dev_list_bottom = list_bottom; }
+	inline bool IsWorldSpecialCharacterStartListBottom() const { return m_special_char_list_bottom; }
+	inline void SetWorldSpecialCharacterStartListBottom(bool list_bottom) { m_special_char_list_bottom = list_bottom; }
 
 private:
-	bool allow_unregistered;
-	bool trace;
-	bool world_trace;
-	bool dump_in_packets;
-	bool dump_out_packets;
-	bool reject_duplicate_servers;
-	int encryption_mode;
-	std::string local_network;
-	std::string account_table;
-	std::string world_registration_table;
-	std::string world_admin_registration_table;
-	std::string world_server_type_table;
+	bool        m_allow_unregistered;
+	bool        m_display_expansions;
+	bool        m_reject_duplicate_servers;
+	bool        m_world_dev_list_bottom;
+	bool        m_special_char_list_bottom;
+	bool        m_allow_token_login;
+	bool        m_show_player_count;
+	bool        m_auto_create_accounts;
+	int         m_encryption_mode;
+	int         m_max_expansions_mask;
+	std::string m_eqemu_loginserver_address;
+	std::string m_default_loginserver_name;
 };
-
-#endif
-

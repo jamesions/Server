@@ -1,29 +1,27 @@
-/*	EQEMu: Everquest Server Emulator
+/*	EQEmu: EQEmulator
 
-	Copyright (C) 2001-2016 EQEMu Development Team (http://eqemulator.net)
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
-
 #include "item_data.h"
-#include "classes.h"
-#include "races.h"
-//#include "deity.h"
+
+#include "common/classes.h"
+#include "common/races.h"
 
 
-uint32 EQEmu::item::ConvertAugTypeToAugTypeBit(uint8 aug_type)
+uint32 EQ::item::ConvertAugTypeToAugTypeBit(uint8 aug_type)
 {
 	switch (aug_type) {
 	case AugTypeGeneralSingleStat:
@@ -95,7 +93,7 @@ uint32 EQEmu::item::ConvertAugTypeToAugTypeBit(uint8 aug_type)
 	}
 }
 
-uint8 EQEmu::item::ConvertAugTypeBitToAugType(uint32 aug_type_bit)
+uint8 EQ::item::ConvertAugTypeBitToAugType(uint32 aug_type_bit)
 {
 	switch (aug_type_bit) {
 	case bit_AugTypeGeneralSingleStat:
@@ -167,48 +165,102 @@ uint8 EQEmu::item::ConvertAugTypeBitToAugType(uint32 aug_type_bit)
 	}
 }
 
-bool EQEmu::ItemData::IsEquipable(uint16 race_id, uint16 class_id) const
+bool EQ::ItemData::IsEquipable(uint16 race_id, uint16 class_id) const
 {
-	if (!(Races & GetPlayerRaceBit(race_id)))
+	if (!(Races & GetPlayerRaceBit(race_id))) {
 		return false;
+	}
 
-	if (!(Classes & GetPlayerClassBit(GetPlayerClassValue(class_id))))
+	if (!(Classes & GetPlayerClassBit(GetPlayerClassValue(class_id)))) {
 		return false;
+	}
 
 	return true;
 }
 
-bool EQEmu::ItemData::IsClassCommon() const
+bool EQ::ItemData::IsClassEquipable(uint16 class_id) const
+{
+
+	if (!(Classes & GetPlayerClassBit(GetPlayerClassValue(class_id)))) {
+		return false;
+	}
+
+	return true;
+}
+
+bool EQ::ItemData::IsRaceEquipable(uint16 race_id) const
+{
+
+	if (!(Races & GetPlayerRaceBit(race_id))) {
+		return false;
+	}
+
+	return true;
+}
+
+bool EQ::ItemData::IsClassCommon() const
 {
 	return (ItemClass == item::ItemClassCommon);
 }
 
-bool EQEmu::ItemData::IsClassBag() const
+bool EQ::ItemData::IsClassBag() const
 {
 	return (ItemClass == item::ItemClassBag);
 }
 
-bool EQEmu::ItemData::IsClassBook() const
+bool EQ::ItemData::IsClassBook() const
 {
 	return (ItemClass == item::ItemClassBook);
 }
 
-bool EQEmu::ItemData::IsType1HWeapon() const
+bool EQ::ItemData::IsType1HWeapon() const
 {
 	return ((ItemType == item::ItemType1HBlunt) || (ItemType == item::ItemType1HSlash) || (ItemType == item::ItemType1HPiercing) || (ItemType == item::ItemTypeMartial));
 }
 
-bool EQEmu::ItemData::IsType2HWeapon() const
+bool EQ::ItemData::IsPetUsable() const
+{
+	if (ItemClass == item::ItemClassBag) {
+		return true;
+	}
+
+	// if it's a misc item and has slots, it's wearable
+	// this item type is conflated with many other item types
+	if (ItemClass == item::ItemTypeMisc && Slots != 0) {
+		return true;
+	}
+
+	switch (ItemType) {
+		case item::ItemType1HBlunt:
+		case item::ItemType1HSlash:
+		case item::ItemType1HPiercing:
+		case item::ItemType2HBlunt:
+		case item::ItemType2HSlash:
+		case item::ItemTypeMartial:
+		case item::ItemTypeShield:
+		case item::ItemTypeArmor:
+		case item::ItemTypeJewelry:
+			return true;
+		default:
+			return false;
+	}
+}
+
+bool EQ::ItemData::IsType2HWeapon() const
 {
 	return ((ItemType == item::ItemType2HBlunt) || (ItemType == item::ItemType2HSlash) || (ItemType == item::ItemType2HPiercing));
 }
 
-bool EQEmu::ItemData::IsTypeShield() const
+bool EQ::ItemData::IsTypeShield() const
 {
 	return (ItemType == item::ItemTypeShield);
 }
 
-bool EQEmu::ItemData::CheckLoreConflict(const ItemData* l_item, const ItemData* r_item)
+bool EQ::ItemData::IsQuestItem() const {
+	return QuestItemFlag;
+}
+
+bool EQ::ItemData::CheckLoreConflict(const ItemData* l_item, const ItemData* r_item)
 {
 	if (!l_item || !r_item)
 		return false;

@@ -1,5 +1,21 @@
-#ifndef XTARGETAUTOHATERS_H
-#define XTARGETAUTOHATERS_H
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
+
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
+*/
+#pragma once
 
 #include <vector>
 
@@ -15,8 +31,7 @@ struct HatersCount {
 };
 public:
 	XTargetAutoHaters() : m_client(nullptr), m_group(nullptr), m_raid(nullptr) {}
-	XTargetAutoHaters(Client *co, Group *go, Raid *ro) : m_client(co), m_group(go), m_raid(ro) {}
-	~XTargetAutoHaters() {}
+	~XTargetAutoHaters() = default;
 
 	void merge(XTargetAutoHaters &other);
 	void demerge(XTargetAutoHaters &other);
@@ -42,7 +57,3 @@ private:
 	Group	*m_group;
 	Raid	*m_raid;
 };
-
-
-#endif /* !XTARGETAUTOHATERS_H */
-

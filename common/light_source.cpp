@@ -1,28 +1,25 @@
-/*	EQEMu: Everquest Server Emulator
-	
-	Copyright (C) 2001-2016 EQEMu Development Team (http://eqemulator.net)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-	
-	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-*/
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
+	You should have received a copy of the GNU General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 #include "light_source.h"
 
-#include <string.h>
+#include <cstring>
 
-
-uint8 EQEmu::lightsource::TypeToLevel(uint8 light_type)
+uint8 EQ::lightsource::TypeToLevel(uint8 light_type)
 {
 	switch (light_type) {
 	case LightTypeGlobeOfStars:
@@ -55,7 +52,7 @@ uint8 EQEmu::lightsource::TypeToLevel(uint8 light_type)
 	}
 }
 
-bool EQEmu::lightsource::IsLevelGreater(uint8 left_type, uint8 right_type)
+bool EQ::lightsource::IsLevelGreater(uint8 left_type, uint8 right_type)
 {
 	static const uint8 light_levels[LightTypeCount] = {
 		LightLevelUnlit,			/* LightTypeNone */
@@ -82,17 +79,17 @@ bool EQEmu::lightsource::IsLevelGreater(uint8 left_type, uint8 right_type)
 	return (light_levels[left_type] > light_levels[right_type]);
 }
 
-EQEmu::LightSource_Struct::LightSource_Struct()
+EQ::LightSource_Struct::LightSource_Struct()
 {
 	Clear();
 }
 
-void EQEmu::LightSource_Struct::Clear()
+void EQ::LightSource_Struct::Clear()
 {
 	memset(&Slot, 0, (sizeof(uint8) * lightsource::LightCount));
 }
 
-void EQEmu::LightSourceProfile::Clear()
+void EQ::LightSourceProfile::Clear()
 {
 	Type.Clear();
 	Level.Clear();

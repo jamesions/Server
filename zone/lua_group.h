@@ -1,12 +1,30 @@
-#ifndef EQEMU_LUA_GROUP_H
-#define EQEMU_LUA_GROUP_H
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
+
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
+*/
+#pragma once
+
 #ifdef LUA_EQEMU
 
-#include "lua_ptr.h"
+#include "zone/lua_ptr.h"
 
 class Group;
 class Lua_Mob;
 class Lua_Client;
+class Lua_Bot;
 
 namespace luabind {
 	struct scope;
@@ -27,24 +45,31 @@ public:
 	}
 
 	void DisbandGroup();
-	bool IsGroupMember(Lua_Mob mob);
+	bool IsGroupMember(const char* name);
+	bool IsGroupMember(Lua_Mob c);
 	void CastGroupSpell(Lua_Mob caster, int spell_id);
-	void SplitExp(uint32 exp, Lua_Mob other);
-	void GroupMessage(Lua_Mob sender, int language, const char *message);
+	void SplitExp(uint64 exp, Lua_Mob other);
+	void GroupMessage(Lua_Mob sender, const char* message);
+	void GroupMessage(Lua_Mob sender, uint8 language_id, const char* message);
 	uint32 GetTotalGroupDamage(Lua_Mob other);
 	void SplitMoney(uint32 copper, uint32 silver, uint32 gold, uint32 platinum);
 	void SplitMoney(uint32 copper, uint32 silver, uint32 gold, uint32 platinum, Lua_Client splitter);
-	void SetLeader(Lua_Mob leader);
+	void SetLeader(Lua_Mob c);
 	Lua_Mob GetLeader();
-	const char *GetLeaderName();
-	bool IsLeader(Lua_Mob leader);
+	std::string GetLeaderName();
+	bool IsLeader(const char* name);
+	bool IsLeader(Lua_Mob c);
 	int GroupCount();
-	int GetHighestLevel();
-	int GetLowestLevel();
+	uint32 GetAverageLevel();
+	uint32 GetHighestLevel();
+	uint32 GetLowestLevel();
 	void TeleportGroup(Lua_Mob sender, uint32 zone_id, uint32 instance_id, float x, float y, float z, float h);
 	int GetID();
-	Lua_Mob GetMember(int index);
+	Lua_Mob GetMember(int member_index);
+	uint8 GetMemberRole(Lua_Mob member);
+	uint8 GetMemberRole(const char* name);
+	bool DoesAnyMemberHaveExpeditionLockout(std::string expedition_name, std::string event_name);
+	bool DoesAnyMemberHaveExpeditionLockout(std::string expedition_name, std::string event_name, int max_check_count);
 };
 
-#endif
-#endif
+#endif // LUA_EQEMU

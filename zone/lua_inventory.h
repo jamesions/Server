@@ -1,13 +1,30 @@
-#ifndef EQEMU_LUA_INVENTORY_H
-#define EQEMU_LUA_INVENTORY_H
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
+
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
+*/
+#pragma once
+
 #ifdef LUA_EQEMU
 
-#include "lua_ptr.h"
+#include "zone/lua_ptr.h"
 
 class Lua_ItemInst;
 class Lua_Item;
 
-namespace EQEmu
+namespace EQ
 {
 	class InventoryProfile;
 }
@@ -18,27 +35,36 @@ namespace luabind {
 
 luabind::scope lua_register_inventory();
 
-class Lua_Inventory : public Lua_Ptr<EQEmu::InventoryProfile>
+// This class should be deprecated due to the nature of inventory actions.
+// Direct manipulation of the inventory system bypasses the client management
+// of database calls and can lead to lost items, duplicated items and/or
+// desync'd inventories, if not handled correctly.
+
+class Lua_Inventory : public Lua_Ptr<EQ::InventoryProfile>
 {
-	typedef EQEmu::InventoryProfile NativeType;
+	typedef EQ::InventoryProfile NativeType;
 public:
 	Lua_Inventory() : Lua_Ptr(nullptr) { }
-	Lua_Inventory(EQEmu::InventoryProfile *d) : Lua_Ptr(d) { }
+	Lua_Inventory(EQ::InventoryProfile *d) : Lua_Ptr(d) { }
 	virtual ~Lua_Inventory() { }
 
-	operator EQEmu::InventoryProfile*() {
-		return reinterpret_cast<EQEmu::InventoryProfile*>(GetLuaPtrData());
+	operator EQ::InventoryProfile*() {
+		return reinterpret_cast<EQ::InventoryProfile*>(GetLuaPtrData());
 	}
 
 	Lua_ItemInst GetItem(int slot_id);
 	Lua_ItemInst GetItem(int slot_id, int bag_slot);
 	int PutItem(int slot_id, Lua_ItemInst item);
 	int PushCursor(Lua_ItemInst item);
-	bool SwapItem(int slot_a, int slot_b);
+	bool SwapItem(int source_slot, int destination_slot);
 	bool DeleteItem(int slot_id);
 	bool DeleteItem(int slot_id, int quantity);
 	bool CheckNoDrop(int slot_id);
+	uint32 CountAugmentEquippedByID(uint32 item_id);
+	uint32 CountItemEquippedByID(uint32 item_id);
 	Lua_ItemInst PopItem(int slot_id);
+	bool HasAugmentEquippedByID(uint32 item_id);
+	bool HasItemEquippedByID(uint32 item_id);
 	int HasItem(int item_id);
 	int HasItem(int item_id, int quantity);
 	int HasItem(int item_id, int quantity, int where);
@@ -59,7 +85,7 @@ public:
 	bool CanItemFitInContainer(Lua_Item item, Lua_Item container);
 	bool SupportsContainers(int slot_id);
 	int GetSlotByItemInst(Lua_ItemInst inst);
+	luabind::object GetAugmentIDsBySlotID(lua_State* L, int16 slot_id);
 };
 
-#endif
-#endif
+#endif // LUA_EQEMU

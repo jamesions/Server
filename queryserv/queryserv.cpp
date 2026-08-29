@@ -1,129 +1,204 @@
-/*	EQEMu: Everquest Server Emulator
-	Copyright (C) 2001-2008 EQEMu Development Team (http://eqemulator.net)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
-
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include "../common/global_define.h"
-#include "../common/eqemu_logsys.h"
-#include "../common/opcodemgr.h"
-#include "../common/eq_stream_factory.h"
-#include "../common/rulesys.h"
-#include "../common/servertalk.h"
-#include "../common/platform.h"
-#include "../common/crash.h"
-#include "database.h"
+#include "common/crash.h"
+#include "common/eqemu_logsys.h"
+#include "common/event/event_loop.h"
+#include "common/events/player_event_logs.h"
+#include "common/net/console_server.h"
+#include "common/net/servertalk_server.h"
+#include "common/opcodemgr.h"
+#include "common/platform.h"
+#include "common/rulesys.h"
+#include "common/strings.h"
+#include "common/timer.h"
+#include "queryserv/database.h"
+#include "queryserv/lfguild.h"
+#include "queryserv/worldserver.h"
+#include "queryserv/zonelist.h"
+#include "queryserv/zoneserver.h"
 #include "queryservconfig.h"
-#include "worldserver.h"
-#include "lfguild.h"
-#include <list>
-#include <signal.h>
+
+#include <csignal>
 
 volatile bool RunLoops = true;
 
-TimeoutManager timeout_manager;
-Database database;
-LFGuildManager lfguildmanager;
-std::string WorldShortName;
+QSDatabase            qs_database;
+Database              database;
+std::string           WorldShortName;
 const queryservconfig *Config;
-WorldServer *worldserver = 0;
-EQEmuLogSys Log;
+WorldServer           *worldserver = 0;
+uint32                numzones     = 0;
 
-void CatchSignal(int sig_num) { 
-	RunLoops = false; 
-	if(worldserver)
-		worldserver->Disconnect();
+void CatchSignal(int sig_num)
+{
+	RunLoops = false;
 }
 
-int main() {
+int main()
+{
 	RegisterExecutablePlatform(ExePlatformQueryServ);
-	Log.LoadLogSettingsDefaults();
-	set_exception_handler(); 
-	Timer LFGuildExpireTimer(60000);  
-	Timer InterserverTimer(INTERSERVER_TIMER); // does auto-reconnect
+	EQEmuLogSys::Instance()->LoadLogSettingsDefaults();
+	set_exception_handler();
+	Timer LFGuildExpireTimer(60000);
 
-	/* Load XML from eqemu_config.xml 
-		<qsdatabase>
-			<host>127.0.0.1</host>
-			<port>3306</port>
-			<username>user</username>
-			<password>password</password>
-			<db>dbname</db>
-		</qsdatabase>
-	*/
+	PathManager::Instance()->Init();
 
-	Log.Out(Logs::General, Logs::QS_Server, "Starting EQEmu QueryServ.");
+	LogInfo("Starting EQEmu QueryServ");
 	if (!queryservconfig::LoadConfig()) {
-		Log.Out(Logs::General, Logs::QS_Server, "Loading server configuration failed.");
+		LogInfo("Loading server configuration failed");
 		return 1;
 	}
 
-	Config = queryservconfig::get(); 
-	WorldShortName = Config->ShortName; 
+	Config         = queryservconfig::get();
+	WorldShortName = Config->ShortName;
 
-	Log.Out(Logs::General, Logs::QS_Server, "Connecting to MySQL...");
-	
+	LogInfo("Connecting to MySQL");
+
 	/* MySQL Connection */
-	if (!database.Connect(
+	if (!qs_database.Connect(
 		Config->QSDatabaseHost.c_str(),
 		Config->QSDatabaseUsername.c_str(),
 		Config->QSDatabasePassword.c_str(),
 		Config->QSDatabaseDB.c_str(),
-		Config->QSDatabasePort)) {
-		Log.Out(Logs::General, Logs::QS_Server, "Cannot continue without a database connection.");
+		Config->QSDatabasePort
+	)) {
+		LogInfo("Cannot continue without a qs database connection");
+		return 1;
+	}
+	if (!database.Connect(
+		Config->DatabaseHost.c_str(),
+		Config->DatabaseUsername.c_str(),
+		Config->DatabasePassword.c_str(),
+		Config->DatabaseDB.c_str(),
+		Config->DatabasePort
+	)) {
+		LogInfo("Cannot continue without a database connection");
 		return 1;
 	}
 
-	/* Register Log System and Settings */
-	database.LoadLogSettings(Log.log_settings);
-	Log.StartFileLogs();
+	EQEmuLogSys::Instance()->SetDatabase(&database)
+		->SetLogPath(PathManager::Instance()->GetLogPath())
+		->LoadLogDatabaseSettings()
+		->StartFileLogs();
 
-	if (signal(SIGINT, CatchSignal) == SIG_ERR)	{
-		Log.Out(Logs::General, Logs::QS_Server, "Could not set signal handler");
+	if (signal(SIGINT, CatchSignal) == SIG_ERR) {
+		LogInfo("Could not set signal handler");
 		return 1;
 	}
-	if (signal(SIGTERM, CatchSignal) == SIG_ERR)	{
-		Log.Out(Logs::General, Logs::QS_Server, "Could not set signal handler");
+	if (signal(SIGTERM, CatchSignal) == SIG_ERR) {
+		LogInfo("Could not set signal handler");
 		return 1;
 	}
+
+	//rules:
+	{
+		std::string tmp;
+		if (database.GetVariable("RuleSet", tmp)) {
+			LogInfo("Loading rule set [{}]", tmp.c_str());
+			if (!RuleManager::Instance()->LoadRules(&database, tmp.c_str(), false)) {
+				LogError("Failed to load ruleset [{}], falling back to defaults", tmp.c_str());
+			}
+		}
+		else {
+			if (!RuleManager::Instance()->LoadRules(&database, "default", false)) {
+				LogInfo("No rule set configured, using default rules");
+			}
+		}
+
+		EQ::InitializeDynamicLookups();
+	}
+
+	std::unique_ptr<EQ::Net::ConsoleServer> console;
+	EQ::Net::ServertalkServerOptions        server_opts;
+	auto                                    server_connection = std::make_unique<EQ::Net::ServertalkServer>();
+	server_opts.port        = Config->QSPort;
+	server_opts.ipv6        = false;
+	server_opts.credentials = Config->SharedKey;
+	server_connection->Listen(server_opts);
+	LogInfo("Server (TCP) listener started on port [{}]", Config->QSPort);
+
+	server_connection->OnConnectionIdentified(
+		"Zone", [&console](std::shared_ptr<EQ::Net::ServertalkServerConnection> connection) {
+			numzones++;
+			ZSList::Instance()->Add(new ZoneServer(connection, console.get()));
+
+			LogInfo(
+				"New Zone Server connection from [{}] at [{}:{}] zone_count [{}]",
+				connection->Handle()->RemoteIP(),
+				connection->Handle()->RemotePort(),
+				connection->GetUUID(),
+				numzones
+			);
+		}
+	);
+
+	server_connection->OnConnectionRemoved(
+		"Zone", [](std::shared_ptr<EQ::Net::ServertalkServerConnection> connection) {
+			numzones--;
+			ZSList::Instance()->Remove(connection->GetUUID());
+
+			LogInfo(
+				"Removed Zone Server connection from [{}] total zone_count [{}]",
+				connection->GetUUID(),
+				numzones
+			);
+		}
+	);
 
 	/* Initial Connection to Worldserver */
 	worldserver = new WorldServer;
-	worldserver->Connect(); 
+	worldserver->Connect();
 
 	/* Load Looking For Guild Manager */
-	lfguildmanager.LoadDatabase();
+	LFGuildManager::Instance()->LoadDatabase();
 
-	while(RunLoops) { 
-		Timer::SetCurrentTime(); 
-		if(LFGuildExpireTimer.Check())
-			lfguildmanager.ExpireEntries();
+	Timer player_event_process_timer(1000);
+	PlayerEventLogs::Instance()->SetDatabase(&qs_database)->Init();
 
-		if (InterserverTimer.Check()) {
-			if (worldserver->TryReconnect() && (!worldserver->Connected()))
-				worldserver->AsyncConnect();
+	auto loop_fn = [&](EQ::Timer *t) {
+		Timer::SetCurrentTime();
+
+		if (!RunLoops) {
+			EQ::EventLoop::Get().Shutdown();
+			return;
 		}
-		worldserver->Process(); 
-		timeout_manager.CheckTimeouts(); 
-		Sleep(100);
-	}
-	Log.CloseFileLogs();
+
+		if (LFGuildExpireTimer.Check()) {
+			LFGuildManager::Instance()->ExpireEntries();
+		}
+
+		if (player_event_process_timer.Check()) {
+			PlayerEventLogs::Instance()->Process();
+		}
+	};
+
+	EQ::Timer process_timer(loop_fn);
+	process_timer.Start(32, true);
+
+	EQ::EventLoop::Get().Run();
+
+	safe_delete(worldserver);
+	EQEmuLogSys::Instance()->CloseFileLogs();
 }
 
-void UpdateWindowTitle(char* iNewTitle) {
+void UpdateWindowTitle(char *iNewTitle)
+{
 #ifdef _WINDOWS
 	char tmp[500];
 	if (iNewTitle) {

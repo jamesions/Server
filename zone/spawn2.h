@@ -1,25 +1,24 @@
-/*	EQEMu: Everquest Server Emulator
-	Copyright (C) 2001-2002 EQEMu Development Team (http://eqemu.org)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
-#ifndef SPAWN2_H
-#define SPAWN2_H
+#pragma once
 
-#include "../common/timer.h"
-#include "npc.h"
+#include "common/timer.h"
+#include "zone/npc.h"
 
 #define SC_AlwaysEnabled 0
 
@@ -32,11 +31,11 @@ public:
 	Spawn2(uint32 spawn2_id, uint32 spawngroup_id,
 		float x, float y, float z, float heading,
 		uint32 respawn, uint32 variance,
-		uint32 timeleft = 0, uint32 grid = 0,
+		uint32 timeleft = 0, uint32 grid = 0, bool in_path_when_zone_idle=false,
 		uint16 cond_id = SC_AlwaysEnabled, int16 min_value = 0, bool in_enabled = true, EmuAppearance anim = eaStanding);
 	~Spawn2();
 
-	void	LoadGrid();
+	void	LoadGrid(int start_wp = 0);
 	void	Enable() { enabled = true; }
 	void	Disable();
 	bool	Enabled() { return enabled; }
@@ -54,10 +53,11 @@ public:
 	float	GetY()		{ return y; }
 	float	GetZ()		{ return z; }
 	float	GetHeading() { return heading; }
-	void	SetRespawnTimer(uint32 newrespawntime) { respawn_ = newrespawntime; };
+	bool	PathWhenZoneIdle() { return path_when_zone_idle; }
+	void	SetRespawnTimer(uint32 newrespawntime) { m_respawn_time = newrespawntime; };
 	void	SetVariance(uint32 newvariance) { variance_ = newvariance; }
 	const uint32 GetVariance() const { return variance_; }
-	uint32	RespawnTimer() { return respawn_; }
+	uint32	RespawnTimer() { return m_respawn_time; }
 	uint32	SpawnGroupID() { return spawngroup_id_; }
 	uint32	CurrentNPCID() { return currentnpcid; }
 	void	SetCurrentNPCID(uint32 nid) { currentnpcid = nid; }
@@ -66,14 +66,26 @@ public:
 	bool	NPCPointerValid() { return (npcthis!=nullptr); }
 	void	SetNPCPointer(NPC* n) { npcthis = n; }
 	void	SetNPCPointerNull() { npcthis = nullptr; }
+	Timer	GetTimer() { return timer; }
 	void	SetTimer(uint32 duration) { timer.Start(duration); }
-	uint32  GetKillCount() { return killcount; }
+	uint32 GetKillCount() { return killcount; }
+	uint32 GetGrid() const { return grid_; }
+	bool GetPathWhenZoneIdle() const { return path_when_zone_idle; }
+	int16 GetConditionMinValue() const { return condition_min_value; }
+	int16 GetAnimation () { return anim; }
+	inline NPC *GetNPC() const { return npcthis; }
+	inline bool IsResumedFromZoneSuspend() const { return m_resumed_from_zone_suspend; }
+	inline void SetResumedFromZoneSuspend(bool resumed) { m_resumed_from_zone_suspend = resumed; }
+	inline void SetEntityVariables(std::map<std::string, std::string> vars) { m_entity_variables = vars; }
+	inline void SetResumedNPCID(uint32 npc_id) { m_resumed_npc_id = npc_id; }
+	inline void SetStoredLocation(const glm::vec4& loc) { m_stored_location = loc; }
+
 protected:
 	friend class Zone;
 	Timer	timer;
 private:
-	uint32	spawn2_id;
-	uint32	respawn_;
+	uint32 spawn2_id;
+	uint32 m_respawn_time;
 	uint32	resetTimer();
 	uint32	despawnTimer(uint32 despawn_timer);
 
@@ -86,12 +98,17 @@ private:
 	float	heading;
 	uint32	variance_;
 	uint32	grid_;
+	bool	path_when_zone_idle;
 	uint16	condition_id;
 	int16	condition_min_value;
 	bool enabled;
 	EmuAppearance anim;
 	bool IsDespawned;
 	uint32  killcount;
+	bool m_resumed_from_zone_suspend = false;
+	uint32 m_resumed_npc_id = 0;
+	std::map<std::string, std::string> m_entity_variables = {};
+	glm::vec4 m_stored_location = {0, 0, -1000, 0}; // use -1000 to indicate unset/zero-state
 };
 
 class SpawnCondition {
@@ -144,9 +161,9 @@ public:
 	SpawnConditionManager();
 
 	void Process();
-	bool LoadSpawnConditions(const char* zone_name, uint32 instance_id);
+	bool LoadSpawnConditions(const std::string& zone_short_name, uint32 instance_id);
 
-	int16 GetCondition(const char *zone_short, uint32 instance_id, uint16 condition_id);
+	int16 GetCondition(const std::string& zone_short_name, uint32 instance_id, uint16 condition);
 	void SetCondition(const char *zone_short, uint32 instance_id, uint16 condition_id, int16 new_value, bool world_update = false);
 	void ToggleEvent(uint32 event_id, bool enabled, bool strict, bool reset_base);
 	bool Check(uint16 condition, int16 min_value);
@@ -157,13 +174,14 @@ protected:
 	std::vector<SpawnEvent> spawn_events;
 
 	void ExecEvent(SpawnEvent &e, bool send_update);
-	void UpdateDBEvent(SpawnEvent &e);
-	bool LoadDBEvent(uint32 event_id, SpawnEvent &e, std::string &zone_name);
-	void UpdateDBCondition(const char* zone_name, uint32 instance_id, uint16 cond_id, int16 value);
+	void UpdateSpawnEvent(SpawnEvent &e);
+	bool LoadSpawnEvent(uint32 event_id, SpawnEvent& event, std::string& zone_short_name);
+	void UpdateSpawnCondition(const std::string& zone_short_name, uint32 instance_id, uint16 condition, int16 condition_value);
 	void FindNearestEvent();
 
 	Timer minute_timer;
 	TimeOfDay_Struct next_event;
 };
 
-#endif
+constexpr int format_as(SpawnCondition::OnChange val) { return static_cast<int>(val); }
+constexpr int format_as(SpawnEvent::Action val) { return static_cast<int>(val); }

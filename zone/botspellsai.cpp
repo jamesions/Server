@@ -1,1515 +1,827 @@
-/*	EQEMu: Everquest Server Emulator
-	Copyright (C) 2001-2016 EQEMu Development Team (http://eqemulator.org)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
-
-#ifdef BOTS
-
 #include "bot.h"
-#include "../common/string_util.h"
 
-#if EQDEBUG >= 12
-	#define BotAI_DEBUG_Spells	25
-#elif EQDEBUG >= 9
-	#define BotAI_DEBUG_Spells	10
-#else
-	#define BotAI_DEBUG_Spells	-1
-#endif
+#include "common/data_verification.h"
+#include "common/repositories/bot_spells_entries_repository.h"
+#include "common/repositories/npc_spells_repository.h"
 
-bool Bot::AICastSpell(Mob* tar, uint8 iChance, uint32 iSpellTypes) {
-
+bool Bot::AICastSpell(Mob* tar, uint8 chance, uint16 spell_type, uint16 sub_target_type, uint16 sub_type) {
 	if (!tar) {
 		return false;
 	}
 
-	if(!AI_HasSpells())
+	LogBotSpellChecksDetail("{} says, 'Attempting {} AICastSpell on {}.'", GetCleanName(), GetSpellTypeNameByID(spell_type), tar->GetCleanName());
+
+	if (
+		!AI_HasSpells() ||
+		(spell_type == BotSpellTypes::Pet && tar != this) ||
+		(IsPetBotSpellType(spell_type) && !tar->IsPet()) ||
+		(!IsPetBotSpellType(spell_type) && tar->IsPet()) ||
+		(!RuleB(Bots, AllowBuffingHealingFamiliars) && tar->IsFamiliar()) ||
+		(tar->IsPet() && tar->IsCharmed() && spell_type == BotSpellTypes::PetBuffs && !RuleB(Bots, AllowCharmedPetBuffs)) ||
+		(tar->IsPet() && tar->IsCharmed() && spell_type == BotSpellTypes::PetCures && !RuleB(Bots, AllowCharmedPetCures)) ||
+		(tar->IsPet() && tar->IsCharmed() && IsHealBotSpellType(spell_type) && !RuleB(Bots, AllowCharmedPetHeals))
+	) {
 		return false;
+	}
 
-	if (iChance < 100) {
-		if (zone->random.Int(0, 100) > iChance){
+	if (
+		!IsCommandedSpell() &&
+		zone->random.Int(0, 100) > chance
+	) {
+		return false;
+	}
+
+	if ((spell_type != BotSpellTypes::Resurrect && spell_type != BotSpellTypes::SummonCorpse) && tar->GetAppearance() == eaDead) {
+		if (!((tar->IsClient() && tar->CastToClient()->GetFeigned()) || tar->IsBot())) {
 			return false;
 		}
 	}
 
-	if(tar->GetAppearance() == eaDead) {
-		if((tar->IsClient() && tar->CastToClient()->GetFeigned()) || tar->IsBot()) {
-			// do nothing
-		}
-		else {
-			return false;
-		}
+	uint8 bot_class = GetClass();
+
+	SetCastedSpellType(UINT16_MAX); // this is for recast timers
+	SetTempSpellType(spell_type); // this is for spell checks
+
+	BotSpell bot_spell;
+	bot_spell.SpellId = 0;
+	bot_spell.SpellIndex = 0;
+	bot_spell.ManaCost = 0;
+
+	if (!BotSpellTypeRequiresLoS(spell_type) || tar == this) {
+		SetHasLoS(true);
 	}
 
-	uint8 botClass = GetClass();
-	uint8 botLevel = GetLevel();
-
-	bool checked_los = false;	//we do not check LOS until we are absolutely sure we need to, and we only do it once.
-
-	bool castedSpell = false;
-
-	BotSpell botSpell;
-	botSpell.SpellId = 0;
-	botSpell.SpellIndex = 0;
-	botSpell.ManaCost = 0;
-
-	switch (iSpellTypes) {
-		case SpellType_Mez: {
-			if (tar->GetBodyType() != BT_Giant) {
-				if(!checked_los) {
-					if(!CheckLosFN(tar))
-						break;	//cannot see target... we assume that no spell is going to work since we will only be casting detrimental spells in this call
-
-					checked_los = true;
-				}
-
-				//TODO
-				//Check if single target or AoE mez is best
-				//if (TARGETS ON MT IS => 3 THEN botSpell = AoEMez)
-				//if (TARGETS ON MT IS <= 2 THEN botSpell = BestMez)
-
-				botSpell = GetBestBotSpellForMez(this);
-
-				if(botSpell.SpellId == 0)
-					break;
-
-				Mob* addMob = GetFirstIncomingMobToMez(this, botSpell);
-
-				if(!addMob){
-					//Say("!addMob.");
-					break;}
-
-				if(!(!addMob->IsImmuneToSpell(botSpell.SpellId, this) && addMob->CanBuffStack(botSpell.SpellId, botLevel, true) >= 0))
-					break;
-
-				castedSpell = AIDoSpellCast(botSpell.SpellIndex, addMob, botSpell.ManaCost);
-
-				if(castedSpell)
-					BotGroupSay(this, "Attempting to mez %s.", addMob->GetCleanName());
-			}
-			break;
-		}
-		case SpellType_Heal: {
-			if (tar->DontHealMeBefore() < Timer::GetCurrentTime()) {
-				uint8 hpr = (uint8)tar->GetHPRatio();
-				bool hasAggro = false;
-				bool isPrimaryHealer = false;
-
-				if(HasGroup()) {
-					isPrimaryHealer = IsGroupHealer();
-				}
-
-				if(hpr < 95 || (tar->IsClient() && (hpr < 95)) || (botClass == BARD)) {
-					if(tar->GetClass() == NECROMANCER) {
-						// Give necromancers a chance to go lifetap something or cleric can spend too much mana on a necro
-						if(hpr >= 40) {
-							break;
-						}
-					}
-
-					if(tar->GetClass() == SHAMAN) {
-						// Give shaman the chance to canni without wasting the cleric's mana
-						if(hpr >= 80) {
-							break;
-						}
-					}
-
-					// Evaluate the situation
-					if((IsEngaged()) && ((botClass == CLERIC) || (botClass == DRUID) || (botClass == SHAMAN) || (botClass == PALADIN))) {
-						if(tar->GetTarget() && tar->GetTarget()->GetHateTop() && tar->GetTarget()->GetHateTop() == tar) {
-							hasAggro = true;
-						}
-
-						if(hpr < 35) {
-							botSpell = GetBestBotSpellForFastHeal(this);
-						}
-						else if(hpr >= 35 && hpr < 70){
-							if(GetNumberNeedingHealedInGroup(60, false) >= 3)
-								botSpell = GetBestBotSpellForGroupHeal(this);
-
-							if(botSpell.SpellId == 0)
-								botSpell = GetBestBotSpellForPercentageHeal(this);
-						}
-						else if(hpr >= 70 && hpr < 95){
-							if(GetNumberNeedingHealedInGroup(80, false) >= 3)
-								botSpell = GetBestBotSpellForGroupHealOverTime(this);
-
-							if(hasAggro)
-								botSpell = GetBestBotSpellForPercentageHeal(this);
-						}
-						else {
-							if(!tar->FindType(SE_HealOverTime))
-								botSpell = GetBestBotSpellForHealOverTime(this);
-						}
-					}
-					else if ((botClass == CLERIC) || (botClass == DRUID) || (botClass == SHAMAN) || (botClass == PALADIN)) {
-						if(GetNumberNeedingHealedInGroup(40, true) >= 2){
-							botSpell = GetBestBotSpellForGroupCompleteHeal(this);
-
-							if(botSpell.SpellId == 0)
-								botSpell = GetBestBotSpellForGroupHeal(this);
-
-							if(botSpell.SpellId == 0)
-								botSpell = GetBestBotSpellForGroupHealOverTime(this);
-
-							if(hpr < 40) {
-								if(botSpell.SpellId == 0)
-									botSpell = GetBestBotSpellForPercentageHeal(this);
-							}
-						}
-						else if(GetNumberNeedingHealedInGroup(60, true) >= 2){
-							botSpell = GetBestBotSpellForGroupHeal(this);
-
-							if(botSpell.SpellId == 0)
-								botSpell = GetBestBotSpellForGroupHealOverTime(this);
-
-							if(hpr < 40) {
-								if(botSpell.SpellId == 0)
-									botSpell = GetBestBotSpellForPercentageHeal(this);
-							}
-						}
-						else if(hpr < 40)
-							botSpell = GetBestBotSpellForPercentageHeal(this);
-						else if(hpr >= 40 && hpr < 75)
-							botSpell = GetBestBotSpellForRegularSingleTargetHeal(this);
-						else {
-							if(hpr < 90 && !tar->FindType(SE_HealOverTime))
-								botSpell = GetBestBotSpellForHealOverTime(this);
-						}
-					}
-					else {
-						float hpRatioToCast = 0.0f;
-
-						switch(this->GetBotStance())
-						{
-							case BotStanceEfficient:
-							case BotStanceAggressive:
-								hpRatioToCast = isPrimaryHealer?90.0f:50.0f;
-								break;
-							case BotStanceBalanced:
-								hpRatioToCast = isPrimaryHealer?95.0f:75.0f;
-								break;
-							case BotStanceReactive:
-								hpRatioToCast = isPrimaryHealer?100.0f:90.0f;
-								break;
-							case BotStanceBurn:
-							case BotStanceBurnAE:
-								hpRatioToCast = isPrimaryHealer?75.0f:25.0f;
-								break;
-							default:
-								hpRatioToCast = isPrimaryHealer?100.0f:0.0f;
-								break;
-						}
-
-						//If we're at specified mana % or below, don't heal as hybrid
-						if(tar->GetHPRatio() <= hpRatioToCast)
-							botSpell = GetBestBotSpellForRegularSingleTargetHeal(this);
-					}
-
-					if(botSpell.SpellId == 0)
-						botSpell = GetBestBotSpellForRegularSingleTargetHeal(this);
-
-					if(botSpell.SpellId == 0)
-						botSpell = GetFirstBotSpellForSingleTargetHeal(this);
-
-					if(botSpell.SpellId == 0 && botClass == BARD){
-						botSpell = GetFirstBotSpellBySpellType(this, SpellType_Heal);
-					}
-
-					// If there is still no spell id, then there isn't going to be one so we are done
-					if(botSpell.SpellId == 0)
-						break;
-
-					// Can we cast this spell on this target?
-					if(!(spells[botSpell.SpellId].targettype==ST_GroupTeleport || spells[botSpell.SpellId].targettype == ST_Target || tar == this)
-						&& !(tar->CanBuffStack(botSpell.SpellId, botLevel, true) >= 0))
-						break;
-
-					uint32 TempDontHealMeBeforeTime = tar->DontHealMeBefore();
-
-					castedSpell = AIDoSpellCast(botSpell.SpellIndex, tar, botSpell.ManaCost, &TempDontHealMeBeforeTime);
-
-					if(castedSpell) {
-						/*if(TempDontHealMeBeforeTime != tar->DontHealMeBefore())
-							tar->SetDontHealMeBefore(TempDontHealMeBeforeTime);
-
-						// For non-HoT heals, do a 4 second delay
-						// TODO: Replace this code with logic that calculates the delay based on number of clerics in rotation
-						//			and ignores heals for anyone except the main tank
-						if(!IsHealOverTimeSpell(botSpell.SpellId)) {
-							if(IsCompleteHealSpell(botSpell.SpellId)) {
-								// Complete Heal 4 second rotation
-								tar->SetDontHealMeBefore(Timer::GetCurrentTime() + 4000);
-							}
-							else {
-								tar->SetDontHealMeBefore(Timer::GetCurrentTime() + 1000);
-							}
-						}*/
-						if(botClass != BARD) {
-							if(IsGroupSpell(botSpell.SpellId)){
-								if(this->HasGroup()) {
-									Group *g = this->GetGroup();
-
-									if(g) {
-										BotGroupSay(this, "Casting %s.", spells[botSpell.SpellId].name);
-
-										for( int i = 0; i<MAX_GROUP_MEMBERS; i++) {
-											if(g->members[i] && !g->members[i]->qglobal) {
-												g->members[i]->SetDontHealMeBefore(Timer::GetCurrentTime() + 1000);
-											}
-										}
-									}
-								}
-							}
-							else {
-								if(tar != this)		//we don't need spam of bots healing themselves
-									BotGroupSay(this, "Casting %s on %s", spells[botSpell.SpellId].name, tar->GetCleanName());
-
-								tar->SetDontHealMeBefore(Timer::GetCurrentTime() + 2000);
-							}
-						}
-					}
-				}
-			}
-			break;
-		}
-		case SpellType_Root: {
-			if (!tar->IsRooted() && tar->DontRootMeBefore() < Timer::GetCurrentTime()) {
-					if(!checked_los) {
-						if(!CheckLosFN(tar))
-							break;	//cannot see target... we assume that no spell is going to work since we will only be casting detrimental spells in this call
-
-						checked_los = true;
-					}
-
-					// TODO: If there is a ranger in the group then don't allow root spells
-
-					botSpell = GetFirstBotSpellBySpellType(this, iSpellTypes);
-
-					if(botSpell.SpellId == 0)
-						break;
-
-					if(tar->CanBuffStack(botSpell.SpellId, botLevel, true) == 0)
-						break;
-
-					uint32 TempDontRootMeBefore = tar->DontRootMeBefore();
-
-					castedSpell = AIDoSpellCast(botSpell.SpellIndex, tar, botSpell.ManaCost, &TempDontRootMeBefore);
-
-					if(TempDontRootMeBefore != tar->DontRootMeBefore())
-						tar->SetDontRootMeBefore(TempDontRootMeBefore);
-			}
-			break;
-		}
-		case SpellType_Buff: {
-			if (tar->DontBuffMeBefore() < Timer::GetCurrentTime()) {
-				std::list<BotSpell> buffSpellList = GetBotSpellsBySpellType(this, SpellType_Buff);
-
-				for(std::list<BotSpell>::iterator itr = buffSpellList.begin(); itr != buffSpellList.end(); ++itr) {
-					BotSpell selectedBotSpell = *itr;
-
-					if(selectedBotSpell.SpellId == 0)
-						continue;
-
-					// no buffs with illusions.. use #bot command to cast illusions
-					if(IsEffectInSpell(selectedBotSpell.SpellId, SE_Illusion) && tar != this)
-						continue;
-
-					//no teleport spells use #bot command to cast teleports
-					if(IsEffectInSpell(selectedBotSpell.SpellId, SE_Teleport) || IsEffectInSpell(selectedBotSpell.SpellId, SE_Succor))
-						continue;
-
-					// can not cast buffs for your own pet only on another pet that isn't yours
-					if((spells[selectedBotSpell.SpellId].targettype == ST_Pet) && (tar != this->GetPet()))
-						continue;
-
-					// Validate target
-
-					if(!((spells[selectedBotSpell.SpellId].targettype == ST_Target || spells[selectedBotSpell.SpellId].targettype == ST_Pet || tar == this ||
-						spells[selectedBotSpell.SpellId].targettype == ST_Group || spells[selectedBotSpell.SpellId].targettype == ST_GroupTeleport ||
-						(botClass == BARD && spells[selectedBotSpell.SpellId].targettype == ST_AEBard))
-						&& !tar->IsImmuneToSpell(selectedBotSpell.SpellId, this)
-						&& (tar->CanBuffStack(selectedBotSpell.SpellId, botLevel, true) >= 0))) {
-							continue;
-					}
-
-					// Put the zone levitate and movement check here since bots are able to bypass the client casting check
-					if((IsEffectInSpell(selectedBotSpell.SpellId, SE_Levitate) && !zone->CanLevitate())
-						|| (IsEffectInSpell(selectedBotSpell.SpellId, SE_MovementSpeed) && !zone->CanCastOutdoor())) {
-							if(botClass != BARD || !IsSpellUsableThisZoneType(selectedBotSpell.SpellId, zone->GetZoneType())){
-								continue;
-							}
-					}
-
-					switch(tar->GetArchetype())
-					{
-						case ARCHETYPE_CASTER:
-							//TODO: probably more caster specific spell effects in here
-							if(IsEffectInSpell(selectedBotSpell.SpellId, SE_AttackSpeed) || IsEffectInSpell(selectedBotSpell.SpellId, SE_ATK) ||
-								IsEffectInSpell(selectedBotSpell.SpellId, SE_STR) || IsEffectInSpell(selectedBotSpell.SpellId, SE_ReverseDS))
-							{
-								continue;
-							}
-							break;
-						case ARCHETYPE_MELEE:
-							if(IsEffectInSpell(selectedBotSpell.SpellId, SE_IncreaseSpellHaste) || IsEffectInSpell(selectedBotSpell.SpellId, SE_ManaPool) ||
-								IsEffectInSpell(selectedBotSpell.SpellId, SE_CastingLevel) || IsEffectInSpell(selectedBotSpell.SpellId, SE_ManaRegen_v2) ||
-								IsEffectInSpell(selectedBotSpell.SpellId, SE_CurrentMana))
-							{
-								continue;
-							}
-							break;
-						case ARCHETYPE_HYBRID:
-							//Hybrids get all buffs
-						default:
-							break;
-					}
-
-					if(botClass == ENCHANTER && IsEffectInSpell(selectedBotSpell.SpellId, SE_Rune))
-					{
-						float manaRatioToCast = 75.0f;
-
-						switch(this->GetBotStance())
-						{
-							case BotStanceEfficient:
-								manaRatioToCast = 90.0f;
-								break;
-							case BotStanceBalanced:
-							case BotStanceAggressive:
-								manaRatioToCast = 75.0f;
-								break;
-							case BotStanceReactive:
-							case BotStanceBurn:
-							case BotStanceBurnAE:
-								manaRatioToCast = 50.0f;
-								break;
-							default:
-								manaRatioToCast = 75.0f;
-								break;
-						}
-
-						//If we're at specified mana % or below, don't rune as enchanter
-						if(this->GetManaRatio() <= manaRatioToCast)
-							break;
-					}
-
-					if(CheckSpellRecastTimers(this, itr->SpellIndex))
-					{
-
-						uint32 TempDontBuffMeBefore = tar->DontBuffMeBefore();
-
-						castedSpell = AIDoSpellCast(selectedBotSpell.SpellIndex, tar, selectedBotSpell.ManaCost, &TempDontBuffMeBefore);
-
-						if(TempDontBuffMeBefore != tar->DontBuffMeBefore())
-							tar->SetDontBuffMeBefore(TempDontBuffMeBefore);
-					}
-
-					if(castedSpell)
-						break;
-				}
-			}
-			break;
-		}
-		case SpellType_Escape: {
-			uint8 hpr = (uint8)GetHPRatio();
-			bool mayGetAggro = false;
-
-#ifdef IPC
-			if (hpr <= 5 || (IsNPC() && CastToNPC()->IsInteractive() && tar != this) )
-#else
-			if(hpr > 15 && ((botClass == WIZARD) || (botClass == ENCHANTER) || (botClass == RANGER)))
-				mayGetAggro = HasOrMayGetAggro(); //classes have hate reducing spells
-
-			if (hpr <= 15 || mayGetAggro)
-#endif
-			{
-				botSpell = GetFirstBotSpellBySpellType(this, iSpellTypes);
-
-				if(botSpell.SpellId == 0)
-					break;
-
-				if(IsInvulnerabilitySpell(botSpell.SpellId))
-					tar = this; //target self for invul type spells
-
-				castedSpell = AIDoSpellCast(botSpell.SpellIndex, tar, botSpell.ManaCost);
-			}
-			break;
-		}
-		case SpellType_Nuke: {
-			if((tar->GetHPRatio() <= 95.0f) || ((botClass == BARD) || (botClass == SHAMAN) || (botClass == ENCHANTER)))
-			{
-				if(!checked_los) {
-					if(!CheckLosFN(tar))
-						break;	//cannot see target... we assume that no spell is going to work since we will only be casting detrimental spells in this call
-
-					checked_los = true;
-				}
-
-				if(botClass == CLERIC || botClass == ENCHANTER)
-				{
-					float manaRatioToCast = 75.0f;
-
-					switch(this->GetBotStance())
-					{
-						case BotStanceEfficient:
-							manaRatioToCast = 90.0f;
-							break;
-						case BotStanceBalanced:
-							manaRatioToCast = 75.0f;
-							break;
-						case BotStanceReactive:
-						case BotStanceAggressive:
-							manaRatioToCast = 50.0f;
-							break;
-						case BotStanceBurn:
-						case BotStanceBurnAE:
-							manaRatioToCast = 25.0f;
-							break;
-						default:
-							manaRatioToCast = 50.0f;
-							break;
-					}
-
-					//If we're at specified mana % or below, don't nuke as cleric or enchanter
-					if(this->GetManaRatio() <= manaRatioToCast)
-						break;
-				}
-
-				if(botClass == MAGICIAN || botClass == SHADOWKNIGHT || botClass == NECROMANCER || botClass == PALADIN || botClass == RANGER || botClass == DRUID || botClass == CLERIC) {
-					if(tar->GetBodyType() == BT_Undead || tar->GetBodyType() == BT_SummonedUndead || tar->GetBodyType() == BT_Vampire)
-						botSpell = GetBestBotSpellForNukeByTargetType(this, ST_Undead);
-					else if(tar->GetBodyType() == BT_Summoned || tar->GetBodyType() == BT_Summoned2 || tar->GetBodyType() == BT_Summoned3)
-						botSpell = GetBestBotSpellForNukeByTargetType(this, ST_Summoned);
-				}
-
-				if(botClass == PALADIN || botClass == DRUID || botClass == CLERIC || botClass == ENCHANTER || botClass == WIZARD) {
-					if(botSpell.SpellId == 0) {
-						uint8 stunChance = (tar->IsCasting() ? 30: 15);
-
-						if(botClass == PALADIN)
-							stunChance = 50;
-
-						if(!tar->GetSpecialAbility(UNSTUNABLE) && !tar->IsStunned() && (zone->random.Int(1, 100) <= stunChance)) {
-							botSpell = GetBestBotSpellForStunByTargetType(this, ST_Target);
-						}
-					}
-				}
-
-				if(botClass == WIZARD && botSpell.SpellId == 0) {
-					botSpell = GetBestBotWizardNukeSpellByTargetResists(this, tar);
-				}
-
-				if(botSpell.SpellId == 0)
-					botSpell = GetBestBotSpellForNukeByTargetType(this, ST_Target);
-
-				if(botSpell.SpellId == 0)
-					break;
-
-				if(!(!tar->IsImmuneToSpell(botSpell.SpellId, this) && (tar->CanBuffStack(botSpell.SpellId, botLevel, true) >= 0)))
-					break;
-
-				if(IsFearSpell(botSpell.SpellId)) {
-					// don't let fear cast if the npc isn't snared or rooted
-					if(tar->GetSnaredAmount() == -1) {
-						if(!tar->IsRooted())
-							break;
-					}
-				}
-
-				castedSpell = AIDoSpellCast(botSpell.SpellIndex, tar, botSpell.ManaCost);
-			}
-			break;
-		}
-		case SpellType_Dispel: {
-			if(tar->GetHPRatio() > 95.0f) {
-				if(!checked_los) {
-					if(!CheckLosFN(tar))
-						break;	//cannot see target... we assume that no spell is going to work since we will only be casting detrimental spells in this call
-
-					checked_los = true;
-				}
-
-				botSpell = GetFirstBotSpellBySpellType(this, iSpellTypes);
-
-				if(botSpell.SpellId == 0)
-					break;
-
-				// TODO: Check target to see if there is anything to dispel
-
-				if(tar->CountDispellableBuffs() > 0) {
-					castedSpell = AIDoSpellCast(botSpell.SpellIndex, tar, botSpell.ManaCost);
-				}
-			}
-			break;
-		}
-		case SpellType_Pet: {
-			//keep mobs from recasting pets when they have them.
-			if (!IsPet() && !GetPetID() && !IsBotCharmer()) {
-				if (botClass == WIZARD) {
-					auto buffs_max = GetMaxBuffSlots();
-					auto my_buffs = GetBuffs();
-					int familiar_buff_slot = -1;
-					if (buffs_max && my_buffs) {
-						for (int index = 0; index < buffs_max; ++index) {
-							if (IsEffectInSpell(my_buffs[index].spellid, SE_Familiar)) {
-								MakePet(my_buffs[index].spellid, spells[my_buffs[index].spellid].teleport_zone);
-								familiar_buff_slot = index;
-								break;
-							}
-						}
-					}
-					if (GetPetID())
-						break;
-
-					if (familiar_buff_slot >= 0) {
-						BuffFadeBySlot(familiar_buff_slot);
-						break;
-					}
-
-					botSpell = GetFirstBotSpellBySpellType(this, SpellType_Pet);
-				}
-				else if (botClass == MAGICIAN) {
-					botSpell = GetBestBotMagicianPetSpell(this);
-				}
-				else {
-					botSpell = GetFirstBotSpellBySpellType(this, SpellType_Pet);
-				}
-
-				if(botSpell.SpellId == 0)
-					break;
-
-				castedSpell = AIDoSpellCast(botSpell.SpellIndex, tar, botSpell.ManaCost);
-			}
-			break;
-		}
-		case SpellType_InCombatBuff: {
-
-			if(botClass == SHAMAN) {
-				checked_los = true;
-
-				std::list<BotSpell> inCombatBuffList = GetBotSpellsBySpellType(this, SpellType_InCombatBuff);
-
-				for(std::list<BotSpell>::iterator itr = inCombatBuffList.begin(); itr != inCombatBuffList.end(); ++itr) {
-					BotSpell selectedBotSpell = *itr;
-
-					if(selectedBotSpell.SpellId == 0)
-						continue;
-
-					if(CheckSpellRecastTimers(this, itr->SpellIndex))
-					{
-						if(!(!tar->IsImmuneToSpell(selectedBotSpell.SpellId, this) && (spells[selectedBotSpell.SpellId].buffduration < 1 || tar->CanBuffStack(selectedBotSpell.SpellId, botLevel, true) >= 0)))
-							continue;
-
-						//short duration buffs or other buffs only to be cast during combat.
-						if (IsSelfConversionSpell(selectedBotSpell.SpellId)) {
-							if(GetManaRatio() > 90.0f || GetHPRatio() < 50.0f || GetHPRatio() < (GetManaRatio() + 10.0f))
-								break; //don't cast if low hp, lots of mana, or if mana is higher than hps
-						}
-
-						castedSpell = AIDoSpellCast(selectedBotSpell.SpellIndex, tar, selectedBotSpell.ManaCost);
-					}
-
-					if(castedSpell)
-						break;
-				}
-			}
-			else if(botClass == BARD) { 
-				if (tar->DontBuffMeBefore() < Timer::GetCurrentTime()) {
-					std::list<BotSpell> inCombatBuffList = GetBotSpellsBySpellType(this, SpellType_InCombatBuff);
-
-					for(std::list<BotSpell>::iterator itr = inCombatBuffList.begin(); itr != inCombatBuffList.end(); ++itr) {
-						BotSpell selectedBotSpell = *itr;
-
-						if(selectedBotSpell.SpellId == 0)
-							continue;
-
-						if(CheckSpellRecastTimers(this, itr->SpellIndex)) {
-							uint32 TempDontBuffMeBefore = tar->DontBuffMeBefore();
-
-							// no buffs with illusions.. use #bot command to cast illusions
-							if(IsEffectInSpell(selectedBotSpell.SpellId, SE_Illusion) && tar != this)
-								continue;
-
-							//no teleport spells use #bot command to cast teleports
-							if(IsEffectInSpell(selectedBotSpell.SpellId, SE_Teleport) || IsEffectInSpell(selectedBotSpell.SpellId, SE_Succor))
-								continue;
-
-							// can not cast buffs for your own pet only on another pet that isn't yours
-							if((spells[selectedBotSpell.SpellId].targettype == ST_Pet) && (tar != this->GetPet()))
-								continue;
-
-							// Validate target
-
-							if(!((spells[selectedBotSpell.SpellId].targettype == ST_Target || spells[selectedBotSpell.SpellId].targettype == ST_Pet || tar == this ||
-								spells[selectedBotSpell.SpellId].targettype == ST_Group || spells[selectedBotSpell.SpellId].targettype == ST_GroupTeleport ||
-								(botClass == BARD && spells[selectedBotSpell.SpellId].targettype == ST_AEBard))
-								&& !tar->IsImmuneToSpell(selectedBotSpell.SpellId, this)
-								&& (tar->CanBuffStack(selectedBotSpell.SpellId, botLevel, true) >= 0))) {
-									continue;
-							}
-
-							// Put the zone levitate and movement check here since bots are able to bypass the client casting check
-							if((IsEffectInSpell(selectedBotSpell.SpellId, SE_Levitate) && !zone->CanLevitate())
-								|| (IsEffectInSpell(selectedBotSpell.SpellId, SE_MovementSpeed) && !zone->CanCastOutdoor())) {
-									if(!IsSpellUsableThisZoneType(selectedBotSpell.SpellId, zone->GetZoneType())) {
-										continue;
-									}
-							}
-
-							if(!IsGroupSpell(selectedBotSpell.SpellId)) {
-								//Only check archetype if song is not a group spell
-								switch(tar->GetArchetype()) {
-									case ARCHETYPE_CASTER:
-										//TODO: probably more caster specific spell effects in here
-										if(IsEffectInSpell(selectedBotSpell.SpellId, SE_AttackSpeed) || IsEffectInSpell(selectedBotSpell.SpellId, SE_ATK) ||
-											IsEffectInSpell(selectedBotSpell.SpellId, SE_STR) || IsEffectInSpell(selectedBotSpell.SpellId, SE_ReverseDS))
-										{
-											continue;
-										}
-										break;
-									case ARCHETYPE_MELEE:
-										if(IsEffectInSpell(selectedBotSpell.SpellId, SE_IncreaseSpellHaste) || IsEffectInSpell(selectedBotSpell.SpellId, SE_ManaPool) ||
-											IsEffectInSpell(selectedBotSpell.SpellId, SE_CastingLevel) || IsEffectInSpell(selectedBotSpell.SpellId, SE_ManaRegen_v2) ||
-											IsEffectInSpell(selectedBotSpell.SpellId, SE_CurrentMana))
-										{
-											continue;
-										}
-										break;
-									case ARCHETYPE_HYBRID:
-										//Hybrids get all buffs
-									default:
-										break;
-								}
-							}
-
-							castedSpell = AIDoSpellCast(selectedBotSpell.SpellIndex, tar, selectedBotSpell.ManaCost, &TempDontBuffMeBefore);
-
-							if(TempDontBuffMeBefore != tar->DontBuffMeBefore())
-								tar->SetDontBuffMeBefore(TempDontBuffMeBefore);
-						}
-
-						if(castedSpell)
-							break;
-					}
-				}
-			}
-			break;
-		}
-		case SpellType_Lifetap: {
-			if (GetHPRatio() < 90.0f) {
-				if(!checked_los) {
-					if(!CheckLosFN(tar))
-						break;	//cannot see target... we assume that no spell is going to work since we will only be casting detrimental spells in this call
-
-					checked_los = true;
-				}
-
-				botSpell = GetFirstBotSpellBySpellType(this, iSpellTypes);
-
-				if(botSpell.SpellId == 0)
-					break;
-
-				if(!(!tar->IsImmuneToSpell(botSpell.SpellId, this) && (tar->CanBuffStack(botSpell.SpellId, botLevel, true) >= 0)))
-					break;
-
-				castedSpell = AIDoSpellCast(botSpell.SpellIndex, tar, botSpell.ManaCost);
-			}
-			break;
-		}
-		case SpellType_Snare: {
-			if (tar->DontSnareMeBefore() < Timer::GetCurrentTime()) {
-					if(!checked_los) {
-						if(!CheckLosFN(tar))
-							break;	//cannot see target... we assume that no spell is going to work since we will only be casting detrimental spells in this call
-
-						checked_los = true;
-					}
-
-					botSpell = GetFirstBotSpellBySpellType(this, iSpellTypes);
-
-					if(botSpell.SpellId == 0)
-						break;
-
-					if(!(!tar->IsImmuneToSpell(botSpell.SpellId, this) && tar->CanBuffStack(botSpell.SpellId, botLevel, true) >= 0))
-						break;
-
-					uint32 TempDontSnareMeBefore = tar->DontSnareMeBefore();
-
-					castedSpell = AIDoSpellCast(botSpell.SpellIndex, tar, botSpell.ManaCost, &TempDontSnareMeBefore);
-
-					if(TempDontSnareMeBefore != tar->DontSnareMeBefore())
-						tar->SetDontSnareMeBefore(TempDontSnareMeBefore);
-			}
-			break;
-		}
-		case SpellType_DOT: {
-			if ((tar->GetHPRatio() <= 98.0f) && (tar->DontDotMeBefore() < Timer::GetCurrentTime()) && (tar->GetHPRatio() > 15.0f)) {
-				if(!checked_los) {
-					if(!CheckLosFN(tar))
-						break;	//cannot see target... we assume that no spell is going to work since we will only be casting detrimental spells in this call
-
-					checked_los = true;
-				}
-
-				if (GetClass() == BARD) {
-					std::list<BotSpell_wPriority> dotList = GetPrioritizedBotSpellsBySpellType(this, SpellType_DOT);
-
-					const int maxDotSelect = 5;
-					int dotSelectCounter = 0;
-
-					for (std::list<BotSpell_wPriority>::iterator itr = dotList.begin(); itr != dotList.end(); ++itr) {
-						BotSpell selectedBotSpell = *itr;
-
-						if (selectedBotSpell.SpellId == 0)
-							continue;
-
-						if (CheckSpellRecastTimers(this, itr->SpellIndex))
-						{
-
-							if (!(!tar->IsImmuneToSpell(selectedBotSpell.SpellId, this) && tar->CanBuffStack(selectedBotSpell.SpellId, botLevel, true) >= 0))
-								continue;
-
-							uint32 TempDontDotMeBefore = tar->DontDotMeBefore();
-
-							castedSpell = AIDoSpellCast(selectedBotSpell.SpellIndex, tar, selectedBotSpell.ManaCost, &TempDontDotMeBefore);
-
-							if (TempDontDotMeBefore != tar->DontDotMeBefore())
-								tar->SetDontDotMeBefore(TempDontDotMeBefore);
-						}
-
-						dotSelectCounter++;
-
-						if ((dotSelectCounter == maxDotSelect) || castedSpell)
-							break;
-					}
-				}
-				else {
-					std::list<BotSpell> dotList = GetBotSpellsBySpellType(this, SpellType_DOT);
-
-					const int maxDotSelect = 5;
-					int dotSelectCounter = 0;
-
-					for (std::list<BotSpell>::iterator itr = dotList.begin(); itr != dotList.end(); ++itr) {
-						BotSpell selectedBotSpell = *itr;
-
-						if (selectedBotSpell.SpellId == 0)
-							continue;
-
-						if (CheckSpellRecastTimers(this, itr->SpellIndex))
-						{
-
-							if (!(!tar->IsImmuneToSpell(selectedBotSpell.SpellId, this) && tar->CanBuffStack(selectedBotSpell.SpellId, botLevel, true) >= 0))
-								continue;
-
-							uint32 TempDontDotMeBefore = tar->DontDotMeBefore();
-
-							castedSpell = AIDoSpellCast(selectedBotSpell.SpellIndex, tar, selectedBotSpell.ManaCost, &TempDontDotMeBefore);
-
-							if (TempDontDotMeBefore != tar->DontDotMeBefore())
-								tar->SetDontDotMeBefore(TempDontDotMeBefore);
-						}
-
-						dotSelectCounter++;
-
-						if ((dotSelectCounter == maxDotSelect) || castedSpell)
-							break;
-					}
-				}
-			}
-			break;
-		}
-		case SpellType_Slow: {
-			if (tar->GetHPRatio() <= 99.0f) {
-
-				if(!checked_los) {
-					if(!CheckLosFN(tar))
-						break;	//cannot see target... we assume that no spell is going to work since we will only be casting detrimental spells in this call
-
-					checked_los = true;
-				}
-
-				switch (botClass) {
-					case BARD: {
-						// probably needs attackable check
-						std::list<BotSpell_wPriority> botSongList = GetPrioritizedBotSpellsBySpellType(this, SpellType_Slow);
-						for (auto iter : botSongList) {
-							if (!iter.SpellId)
-								continue;
-							if (!CheckSpellRecastTimers(this, iter.SpellIndex))
-								continue;
-							if (spells[iter.SpellId].zonetype != -1 && zone->GetZoneType() != -1 && spells[iter.SpellId].zonetype != zone->GetZoneType()) // is this bit or index?
-								continue;
-							if (spells[iter.SpellId].targettype != ST_Target)
-								continue;
-							if (tar->CanBuffStack(iter.SpellId, botLevel, true) < 0)
-								continue;
-
-							castedSpell = AIDoSpellCast(iter.SpellIndex, tar, iter.ManaCost);
-							if (castedSpell)
-								break;
-						}
-
-						break;
-					}
-					case ENCHANTER: {
-						botSpell = GetBestBotSpellForMagicBasedSlow(this);
-						break;
-					}
-					case SHAMAN:
-					case BEASTLORD: {
-						botSpell = GetBestBotSpellForDiseaseBasedSlow(this);
-
-						if(botSpell.SpellId == 0 || ((tar->GetMR() - 50) < (tar->GetDR() + spells[botSpell.SpellId].ResistDiff)))
-							botSpell = GetBestBotSpellForMagicBasedSlow(this);
-						break;
-					}
-				}
-
-				if(botSpell.SpellId == 0)
-					break;
-
-				if(!(!tar->IsImmuneToSpell(botSpell.SpellId, this) && tar->CanBuffStack(botSpell.SpellId, botLevel, true) >= 0))
-					break;
-
-				castedSpell = AIDoSpellCast(botSpell.SpellIndex, tar, botSpell.ManaCost);
-
-				if(castedSpell && GetClass() != BARD)
-					BotGroupSay(this, "Attempting to slow %s.", tar->GetCleanName());
-			}
-			break;
-		}
-		case SpellType_Debuff: {
-			if((tar->GetHPRatio() <= 99.0f) || ((botClass == BARD) || (botClass == SHAMAN) || (botClass == ENCHANTER) || (botClass == DRUID)) && (tar->GetHPRatio() > 40.0f))
-			{
-				if(!checked_los) {
-					if(!CheckLosFN(tar))
-						break;	//cannot see target... we assume that no spell is going to work since we will only be casting detrimental spells in this call
-
-					checked_los = true;
-				}
-
-				botSpell = GetBestBotSpellForResistDebuff(this, tar);
-
-				if(botSpell.SpellId == 0)
-					botSpell = GetDebuffBotSpell(this, tar);
-
-				if(botSpell.SpellId == 0)
-					break;
-
-				if(!(!tar->IsImmuneToSpell(botSpell.SpellId, this) && (tar->CanBuffStack(botSpell.SpellId, botLevel, true) >= 0)))
-					break;
-
-				castedSpell = AIDoSpellCast(botSpell.SpellIndex, tar, botSpell.ManaCost);
-			}
-			break;
-		}
-		case SpellType_Cure: {
-			if(GetNeedsCured(tar) && (tar->DontCureMeBefore() < Timer::GetCurrentTime()) && !(GetNumberNeedingHealedInGroup(25, false) > 0) && !(GetNumberNeedingHealedInGroup(40, false) > 2))
-			{
-				botSpell = GetBestBotSpellForCure(this, tar);
-
-				if(botSpell.SpellId == 0)
-					break;
-
-				uint32 TempDontCureMeBeforeTime = tar->DontCureMeBefore();
-
-				castedSpell = AIDoSpellCast(botSpell.SpellIndex, tar, botSpell.ManaCost, &TempDontCureMeBeforeTime);
-
-				if(castedSpell) {
-					if(botClass != BARD) {
-						if(IsGroupSpell(botSpell.SpellId)){
-							Group *g;
-
-							if(this->HasGroup()) {
-								Group *g = this->GetGroup();
-
-								if(g) {
-									for( int i = 0; i<MAX_GROUP_MEMBERS; i++) {
-										if(g->members[i] && !g->members[i]->qglobal) {
-											if(TempDontCureMeBeforeTime != tar->DontCureMeBefore())
-												g->members[i]->SetDontCureMeBefore(Timer::GetCurrentTime() + 4000);
-										}
-									}
-								}
-							}
-						}
-						else {
-							if(TempDontCureMeBeforeTime != tar->DontCureMeBefore())
-								tar->SetDontCureMeBefore(Timer::GetCurrentTime() + 4000);
-						}
-					}
-				}
-			}
-			break;
-		}
-		case SpellType_Resurrect:
-			break;
-		case SpellType_HateRedux: {
-			// assumed group member at this point
-			if (GetClass() == BARD) {
-				std::list<BotSpell_wPriority> botSongList = GetPrioritizedBotSpellsBySpellType(this, SpellType_HateRedux);
-				for (auto iter : botSongList) {
-					if (!iter.SpellId)
-						continue;
-					if (!CheckSpellRecastTimers(this, iter.SpellIndex))
-						continue;
-					if (spells[iter.SpellId].zonetype != -1 && zone->GetZoneType() != -1 && spells[iter.SpellId].zonetype != zone->GetZoneType()) // is this bit or index?
-						continue;
-					if (spells[iter.SpellId].targettype != ST_Target)
-						continue;
-					if (tar->CanBuffStack(iter.SpellId, botLevel, true) < 0)
-						continue;
-
-					castedSpell = AIDoSpellCast(iter.SpellIndex, tar, iter.ManaCost);
-					if (castedSpell) {
-						BotGroupSay(this, "Attempting to reduce hate on %s.", tar->GetCleanName());
-						break;
-					}
-				}
+	switch (spell_type) {
+		case BotSpellTypes::Slow:
+			if (tar->GetSpecialAbility(SpecialAbility::SlowImmunity)) {
+				return false;
 			}
 
 			break;
-		}
-		case SpellType_InCombatBuffSong: {
-			if (GetClass() != BARD || tar != this) // In-Combat songs can be cast Out-of-Combat in preparation for battle
-				break;
-
-			std::list<BotSpell_wPriority> botSongList = GetPrioritizedBotSpellsBySpellType(this, SpellType_InCombatBuffSong);
-			for (auto iter : botSongList) {
-				if (!iter.SpellId)
-					continue;
-				if (!CheckSpellRecastTimers(this, iter.SpellIndex))
-					continue;
-				if (spells[iter.SpellId].zonetype != -1 && zone->GetZoneType() != -1 && spells[iter.SpellId].zonetype != zone->GetZoneType()) // is this bit or index?
-					continue;
-				switch (spells[iter.SpellId].targettype) {
-				case ST_AEBard:
-				case ST_AECaster:
-				case ST_GroupTeleport:
-				case ST_Group:
-				case ST_Self:
-					break;
-				default:
-					continue;
-				}
-				if (tar->CanBuffStack(iter.SpellId, botLevel, true) < 0)
-					continue;
-
-				castedSpell = AIDoSpellCast(iter.SpellIndex, tar, iter.ManaCost);
-				if (castedSpell)
-					break;
+		case BotSpellTypes::Snare:
+			if (tar->GetSpecialAbility(SpecialAbility::SnareImmunity)) {
+				return false;
 			}
 
 			break;
-		}
-		case SpellType_OutOfCombatBuffSong: {
-			if (GetClass() != BARD || tar != this || IsEngaged()) // Out-of-Combat songs can not be cast in combat
-				break;
-
-			std::list<BotSpell_wPriority> botSongList = GetPrioritizedBotSpellsBySpellType(this, SpellType_OutOfCombatBuffSong);
-			for (auto iter : botSongList) {
-				if (!iter.SpellId)
-					continue;
-				if (!CheckSpellRecastTimers(this, iter.SpellIndex))
-					continue;
-				if (spells[iter.SpellId].zonetype != -1 && zone->GetZoneType() != -1 && spells[iter.SpellId].zonetype != zone->GetZoneType()) // is this bit or index?
-					continue;
-				switch (spells[iter.SpellId].targettype) {
-				case ST_AEBard:
-				case ST_AECaster:
-				case ST_GroupTeleport:
-				case ST_Group:
-				case ST_Self:
-					break;
-				default:
-					continue;
-				}
-				if (tar->CanBuffStack(iter.SpellId, botLevel, true) < 0)
-					continue;
-
-				castedSpell = AIDoSpellCast(iter.SpellIndex, tar, iter.ManaCost);
-				if (castedSpell)
-					break;
+		case BotSpellTypes::AELull:
+		case BotSpellTypes::Lull:
+			if (tar->GetSpecialAbility(SpecialAbility::PacifyImmunity)) {
+				return false;
 			}
 
 			break;
-		}
-		case SpellType_PreCombatBuff: {
+		case BotSpellTypes::Fear:
+			if (tar->GetSpecialAbility(SpecialAbility::FearImmunity)) {
+				return false;
+			}
+
+			if (!IsCommandedSpell() && (tar->IsRooted() || tar->GetSnaredAmount() == -1)) {
+				return false;
+			}
+
 			break;
-		}
-		case SpellType_PreCombatBuffSong: {
+		case BotSpellTypes::Dispel:
+			if (tar->GetSpecialAbility(SpecialAbility::DispellImmunity)) {
+				return false;
+			}
+
+			if (!IsCommandedSpell() && tar->CountDispellableBuffs() <= 0) {
+				return false;
+			}
+
 			break;
-		}
+		case BotSpellTypes::HateRedux:
+			if (!IsCommandedSpell() && !GetNeedsHateRedux(tar)) {
+				return false;
+			}
+
+			break;
+		case BotSpellTypes::InCombatBuff:
+			if (!IsCommandedSpell() && GetClass() != Class::Shaman && spell_type == BotSpellTypes::InCombatBuff && IsCasterClass(GetClass()) && GetLevel() >= GetStopMeleeLevel()) {
+				return false;
+			}
+
+			break;
+		case BotSpellTypes::HateLine:
+			if (!tar->IsNPC()) {
+				return false;
+			}
+
+			break;
+		case BotSpellTypes::InCombatBuffSong:
+		case BotSpellTypes::Buff:
+		case BotSpellTypes::PetBuffs:
+		case BotSpellTypes::PreCombatBuff:
+		case BotSpellTypes::DamageShields:
+		case BotSpellTypes::PetDamageShields:
+		case BotSpellTypes::ResistBuffs:
+		case BotSpellTypes::PetResistBuffs:
+		case BotSpellTypes::Teleport:
+		case BotSpellTypes::Succor:
+		case BotSpellTypes::BindAffinity:
+		case BotSpellTypes::Identify:
+		case BotSpellTypes::Levitate:
+		case BotSpellTypes::Rune:
+		case BotSpellTypes::WaterBreathing:
+		case BotSpellTypes::Size:
+		case BotSpellTypes::Invisibility:
+		case BotSpellTypes::MovementSpeed:
+		case BotSpellTypes::SendHome:
+			if (!tar->IsOfClientBot() && !(tar->IsPet() && tar->GetOwner() && tar->GetOwner()->IsOfClientBot())) {
+				return false;
+			}
+
+			break;
+		case BotSpellTypes::PreCombatBuffSong:
+		case BotSpellTypes::OutOfCombatBuffSong:
+			if (!IsCommandedSpell() && (IsEngaged() || tar->IsEngaged())) { // Out-of-Combat songs can not be cast in combat
+				return false;
+			}
+
+			break;
+		case BotSpellTypes::AEMez:
+		case BotSpellTypes::Mez:
+			return BotCastMez(tar, bot_class, bot_spell, spell_type);
+		case BotSpellTypes::AENukes:
+		case BotSpellTypes::AERains:
+		case BotSpellTypes::PBAENuke:
+		case BotSpellTypes::Nuke:
+		case BotSpellTypes::AEStun:
+		case BotSpellTypes::Stun:
+			return BotCastNuke(tar, bot_class, bot_spell, spell_type);
+		case BotSpellTypes::RegularHeal:
+		case BotSpellTypes::GroupCompleteHeals:
+		case BotSpellTypes::CompleteHeal:
+		case BotSpellTypes::FastHeals:
+		case BotSpellTypes::VeryFastHeals:
+		case BotSpellTypes::GroupHeals:
+		case BotSpellTypes::GroupHoTHeals:
+		case BotSpellTypes::HoTHeals:
+		case BotSpellTypes::PetRegularHeals:
+		case BotSpellTypes::PetCompleteHeals:
+		case BotSpellTypes::PetFastHeals:
+		case BotSpellTypes::PetVeryFastHeals:
+		case BotSpellTypes::PetHoTHeals:
+			if (!tar->IsOfClientBot() && !(tar->IsPet() && tar->GetOwner() && tar->GetOwner()->IsOfClientBot())) {
+				return false;
+			}
+
+			return BotCastHeal(tar, bot_class, bot_spell, spell_type);
+		case BotSpellTypes::GroupCures:
+		case BotSpellTypes::Cure:
+		case BotSpellTypes::PetCures:
+			if (!tar->IsOfClientBot() && !(tar->IsPet() && tar->GetOwner() && tar->GetOwner()->IsOfClientBot())) {
+				return false;
+			}
+
+			return BotCastCure(tar, bot_class, bot_spell, spell_type);
+		case BotSpellTypes::Pet:
+			if (HasPet() || IsBotCharmer()) {
+				return false;
+			}
+
+			return BotCastPet(tar, bot_class, bot_spell, spell_type);
+		case BotSpellTypes::Resurrect:
+			if (!tar->IsCorpse() || !tar->CastToCorpse()->IsPlayerCorpse()) {
+				return false;
+			}
+
+			break;
+		case BotSpellTypes::Charm:
+			if (HasPet() || tar->IsCharmed() || !tar->IsNPC() || tar->GetSpecialAbility(SpecialAbility::CharmImmunity)) {
+				return false;
+			}
+
+			break;
 		default:
 			break;
 	}
 
-	return castedSpell;
+	std::vector<BotSpell_wPriority> bot_spell_list = GetPrioritizedBotSpellsBySpellType(this, spell_type, tar, (IsAEBotSpellType(spell_type) || sub_target_type == CommandedSubTypes::AETarget), sub_target_type, sub_type);
+
+	for (const auto& s : bot_spell_list) {
+		if (!IsValidSpell(s.SpellId)) {
+			continue;
+		}
+
+		if (BotRequiresLoSToCast(spell_type, s.SpellId) && !HasLoS()) {
+			continue;
+		}
+
+		if (IsInvulnerabilitySpell(s.SpellId)) {
+			tar = this; //target self for invul type spells
+		}
+
+		if (IsCommandedSpell() && IsCasting()) {
+			RaidGroupSay(
+				fmt::format(
+					"Interrupting {}. I have been commanded to try to cast a [{}] spell, {} on {}.",
+					CastingSpellID() ? spells[CastingSpellID()].name : "my spell",
+					GetSpellTypeNameByID(spell_type),
+					spells[s.SpellId].name,
+					tar->GetCleanName()
+				).c_str()
+			);
+
+			InterruptSpell();
+		}
+
+		if (AIDoSpellCast(s.SpellIndex, tar, s.ManaCost)) {
+			if (BotSpellTypeUsesTargetSettings(spell_type)) {
+				SetCastedSpellType(UINT16_MAX);
+
+				if (!IsCommandedSpell()) {
+					SetBotSpellRecastTimer(spell_type, tar, true);
+				}
+			}
+			else {
+				SetCastedSpellType(spell_type);
+			}
+
+			RaidGroupSay(
+				fmt::format(
+					"Casting {} [{}] on {}.",
+					GetSpellName(s.SpellId),
+					GetSpellTypeNameByID(spell_type),
+					(tar == this ? "myself" : tar->GetCleanName())
+				).c_str()
+			);
+
+			return true;
+		}
+	}
+
+	return false;
 }
 
-bool Bot::AIDoSpellCast(uint8 i, Mob* tar, int32 mana_cost, uint32* oDontDoAgainBefore) {
+bool Bot::BotCastMez(Mob* tar, uint8 bot_class, BotSpell& bot_spell, uint16 spell_type) {
+	std::vector<BotSpell_wPriority> bot_spell_list = GetPrioritizedBotSpellsBySpellType(this, spell_type, tar, IsAEBotSpellType(spell_type));
+
+	for (const auto& s : bot_spell_list) {
+		if (!IsValidSpell(s.SpellId)) {
+			continue;
+		}
+
+		if (BotRequiresLoSToCast(spell_type, s.SpellId) && !HasLoS()) {
+			continue;
+		}
+
+		if (!IsCommandedSpell()) {
+			Mob* add_mob = GetFirstIncomingMobToMez(this, s.SpellId, spell_type, IsAEBotSpellType(spell_type));
+
+			if (!add_mob) {
+				continue;
+			}
+
+			tar = add_mob;
+		}
+
+		if (AIDoSpellCast(s.SpellIndex, tar, s.ManaCost)) {
+			if (BotSpellTypeUsesTargetSettings(spell_type)) {
+				SetCastedSpellType(UINT16_MAX);
+
+				if (!IsCommandedSpell()) {
+					SetBotSpellRecastTimer(spell_type, tar, true);
+				}
+			}
+			else {
+				SetCastedSpellType(spell_type);
+			}
+
+			RaidGroupSay(
+				fmt::format(
+					"Casting {} [{}] on {}.",
+					GetSpellName(s.SpellId),
+					GetSpellTypeNameByID(spell_type),
+					(tar == this ? "myself" : tar->GetCleanName())
+				).c_str()
+			);
+
+			return true;
+		}
+	}
+
+	return false;
+}
+
+bool Bot::BotCastCure(Mob* tar, uint8 bot_class, BotSpell& bot_spell, uint16 spell_type) {
+	uint32 current_time = Timer::GetCurrentTime();
+	uint32 next_cure_time = tar->DontCureMeBefore();
+
+	if (!IsCommandedSpell()) {
+		if ((next_cure_time > current_time) || !GetNeedsCured(tar)) {
+			return false;
+		}
+	}
+
+	bot_spell = GetBestBotSpellForCure(this, tar, spell_type);
+
+	if (!IsValidSpell(bot_spell.SpellId)) {
+		return false;
+	}
+
+	if (BotRequiresLoSToCast(spell_type, bot_spell.SpellId) && !HasLoS()) {
+		return false;
+	}
+
+	if (AIDoSpellCast(bot_spell.SpellIndex, tar, bot_spell.ManaCost)) {
+		if (IsGroupSpell(bot_spell.SpellId)) {
+			if (!IsCommandedSpell()) {
+				for (Mob* m : GatherSpellTargets(false, tar)) {
+					SetBotSpellRecastTimer(spell_type, m, true);
+				}
+			}
+
+			RaidGroupSay(
+				fmt::format(
+					"Curing the group with {}.",
+					GetSpellName(bot_spell.SpellId)
+				).c_str()
+			);
+		}
+		else {
+			if (!IsCommandedSpell()) {
+				SetBotSpellRecastTimer(spell_type, tar, true);
+			}
+
+			RaidGroupSay(
+				fmt::format(
+					"Curing {} with {}.",
+					(tar == this ? "myself" : tar->GetCleanName()),
+					GetSpellName(bot_spell.SpellId)
+				).c_str()
+			);
+		}
+
+		return true;
+	}
+
+	return false;
+}
+
+bool Bot::BotCastPet(Mob* tar, uint8 bot_class, BotSpell& bot_spell, uint16 spell_type) {
+	if (bot_class == Class::Wizard) {
+		auto buffs_max = GetMaxBuffSlots();
+		auto my_buffs = GetBuffs();
+		int familiar_buff_slot = -1;
+		if (buffs_max && my_buffs) {
+			for (int index = 0; index < buffs_max; ++index) {
+				if (IsEffectInSpell(my_buffs[index].spellid, SpellEffect::Familiar)) {
+					MakePet(my_buffs[index].spellid, spells[my_buffs[index].spellid].teleport_zone);
+					familiar_buff_slot = index;
+					break;
+				}
+			}
+		}
+		if (GetPetID()) {
+			return false;
+		}
+		if (familiar_buff_slot >= 0) {
+			BuffFadeBySlot(familiar_buff_slot);
+			return false;
+		}
+
+		bot_spell = GetFirstBotSpellBySpellType(this, spell_type);
+	}
+	else if (bot_class == Class::Magician) {
+		bot_spell = GetBestBotMagicianPetSpell(this, spell_type);
+	}
+	else {
+		bot_spell = GetFirstBotSpellBySpellType(this, spell_type);
+	}
+
+	if (!IsValidSpell(bot_spell.SpellId)) {
+		return false;
+	}
+
+	if (BotRequiresLoSToCast(spell_type, bot_spell.SpellId) && !HasLoS()) {
+		return false;
+	}
+
+	if (AIDoSpellCast(bot_spell.SpellIndex, tar, bot_spell.ManaCost)) {
+		SetCastedSpellType(spell_type);
+
+		RaidGroupSay(
+			fmt::format(
+				"Summoning a pet [{}].",
+				GetSpellName(bot_spell.SpellId)
+			).c_str()
+		);
+
+		return true;
+	}
+
+	return false;
+}
+
+bool Bot::BotCastNuke(Mob* tar, uint8 bot_class, BotSpell& bot_spell, uint16 spell_type) {
+	if (BotRequiresLoSToCast(spell_type, bot_spell.SpellId) && !HasLoS()) {
+		return false;
+	}
+
+	if (spell_type == BotSpellTypes::Stun || spell_type == BotSpellTypes::AEStun) {
+		uint8 stun_chance = (tar->IsCasting() ? RuleI(Bots, StunCastChanceIfCasting) : RuleI(Bots, StunCastChanceNormal));
+
+		if (bot_class == Class::Paladin) {
+			stun_chance = RuleI(Bots, StunCastChancePaladins);
+		}
+
+		if (
+			!tar->GetSpecialAbility(SpecialAbility::StunImmunity) &&
+			(
+				IsCommandedSpell() ||
+				(!tar->IsStunned() && (zone->random.Int(1, 100) <= stun_chance))
+			)
+		) {
+			bot_spell = GetBestBotSpellForStunByTargetType(this, ST_TargetOptional, spell_type, IsAEBotSpellType(spell_type), tar);
+		}
+
+		if (!IsValidSpell(bot_spell.SpellId)) {
+			return false;
+		}
+	}
+
+	if (!IsValidSpell(bot_spell.SpellId)) {
+		bot_spell = GetBestBotSpellForNukeByBodyType(this, tar->GetBodyType(), spell_type, IsAEBotSpellType(spell_type), tar);
+	}
+
+	if (spell_type == BotSpellTypes::Nuke && bot_class == Class::Wizard && !IsValidSpell(bot_spell.SpellId)) {
+		bot_spell = GetBestBotWizardNukeSpellByTargetResists(this, tar, spell_type);
+	}
+
+	if (!IsValidSpell(bot_spell.SpellId)) {
+		std::vector<BotSpell_wPriority> bot_spell_list = GetPrioritizedBotSpellsBySpellType(this, spell_type, tar, IsAEBotSpellType(spell_type));
+
+		for (const auto& s : bot_spell_list) {
+			if (!IsValidSpell(s.SpellId)) {
+				continue;
+			}
+
+			if (AIDoSpellCast(s.SpellIndex, tar, s.ManaCost)) {
+				SetCastedSpellType(spell_type);
+
+				RaidGroupSay(
+					fmt::format(
+						"Casting {} [{}] on {}.",
+						GetSpellName(s.SpellId),
+						GetSpellTypeNameByID(spell_type),
+						tar->GetCleanName()
+					).c_str()
+				);
+
+				return true;
+			}
+		}
+	}
+	else {
+		if (AIDoSpellCast(bot_spell.SpellIndex, tar, bot_spell.ManaCost)) {
+			SetCastedSpellType(spell_type);
+
+			RaidGroupSay(
+				fmt::format(
+					"Casting {} [{}] on {}.",
+					GetSpellName(bot_spell.SpellId),
+					GetSpellTypeNameByID(spell_type),
+					tar->GetCleanName()
+				).c_str()
+			);
+
+			return true;
+		}
+	}
+
+	return false;
+}
+
+bool Bot::BotCastHeal(Mob* tar, uint8 bot_class, BotSpell& bot_spell, uint16 spell_type) {
+	if (!TargetValidation(tar)) {
+		return false;
+	}
+
+	bot_spell = GetSpellByHealType(spell_type, tar);
+
+	if (!IsValidSpell(bot_spell.SpellId)) {
+		return false;
+	}
+
+	if (AIDoSpellCast(bot_spell.SpellIndex, tar, bot_spell.ManaCost)) {
+		if (IsGroupSpell(bot_spell.SpellId)) {
+			if (bot_class != Class::Bard) {
+				if (!IsCommandedSpell()) {
+					for (Mob* m : GatherSpellTargets(false, tar)) {
+						SetBotSpellRecastTimer(spell_type, m, true);
+					}
+				}
+			}
+
+			RaidGroupSay(
+				fmt::format(
+					"Healing the group with {} [{}].",
+					GetSpellName(bot_spell.SpellId),
+					GetSpellTypeNameByID(spell_type)
+				).c_str()
+			);
+
+		}
+		else {
+			if (bot_class != Class::Bard) {
+				if (!IsCommandedSpell()) {
+					SetBotSpellRecastTimer(spell_type, tar, true);
+				}
+			}
+
+			RaidGroupSay(
+				fmt::format(
+					"Healing {} with {} [{}].",
+					(tar == this ? "myself" : tar->GetCleanName()),
+					GetSpellName(bot_spell.SpellId),
+					GetSpellTypeNameByID(spell_type)
+				).c_str()
+			);
+		}
+
+		return true;
+	}
+
+	return false;
+}
+
+bool Bot::AIDoSpellCast(int32 i, Mob* tar, int32 mana_cost, uint32* oDontDoAgainBefore) {
 	bool result = false;
 
 	// manacost has special values, -1 is no mana cost, -2 is instant cast (no mana)
 	int32 manaCost = mana_cost;
 
-	if (manaCost == -1)
-		manaCost = spells[AIspells[i].spellid].mana;
-	else if (manaCost == -2)
+	if (manaCost == -1) {
+		manaCost = spells[AIBot_spells[i].spellid].mana;
+	} else if (manaCost == -2) {
 		manaCost = 0;
+	}
 
-	int32 extraMana = 0;
-	int32 hasMana = GetMana();
+	int64 hasMana = GetMana();
 
 	// Allow bots to cast buff spells even if they are out of mana
-	if(RuleB(Bots, FinishBuffing)) {
-		if(manaCost > hasMana) {
-			// Let's have the bots complete the buff time process
-			if(AIspells[i].type & SpellType_Buff) {
-				extraMana = manaCost - hasMana;
-				SetMana(manaCost);
-			}
-		}
+	if (
+		RuleB(Bots, FinishBuffing) &&
+		manaCost > hasMana &&
+		!IsEngaged() &&
+		IsBotBuffSpellType(AIBot_spells[i].type)
+	) {
+		SetMana(manaCost);
 	}
 
 	float dist2 = 0;
 
-	if (AIspells[i].type & SpellType_Escape) {
+	if (AIBot_spells[i].type == BotSpellTypes::Escape) {
 		dist2 = 0;
 	} else
 		dist2 = DistanceSquared(m_Position, tar->GetPosition());
 
-	if (((((spells[AIspells[i].spellid].targettype==ST_GroupTeleport && AIspells[i].type==2)
-				|| spells[AIspells[i].spellid].targettype==ST_AECaster
-				|| spells[AIspells[i].spellid].targettype==ST_Group
-				|| spells[AIspells[i].spellid].targettype==ST_AEBard)
-				&& dist2 <= spells[AIspells[i].spellid].aoerange*spells[AIspells[i].spellid].aoerange)
-				|| dist2 <= GetActSpellRange(AIspells[i].spellid, spells[AIspells[i].spellid].range)*GetActSpellRange(AIspells[i].spellid, spells[AIspells[i].spellid].range)) && (mana_cost <= GetMana() || GetMana() == GetMaxMana()))
-	{
-		result = NPC::AIDoSpellCast(i, tar, mana_cost, oDontDoAgainBefore);
+	if (IsValidSpellRange(AIBot_spells[i].spellid, tar) && (mana_cost <= GetMana() || IsBotNonSpellFighter())) {
+		casting_spell_AIindex = i;
+		LogAI("spellid [{}] tar [{}] mana [{}] Name [{}]", AIBot_spells[i].spellid, tar->GetName(), mana_cost, spells[AIBot_spells[i].spellid].name);
+		result = Mob::CastSpell(AIBot_spells[i].spellid, tar->GetID(), EQ::spells::CastingSlot::Gem2, spells[AIBot_spells[i].spellid].cast_time, AIBot_spells[i].manacost == -2 ? 0 : mana_cost, oDontDoAgainBefore, -1, -1, 0, &(AIBot_spells[i].resist_adjust));
 
-		if(IsCasting() && IsSitting())
+		if (IsCasting() && IsSitting())
 			Stand();
 	}
 
 	// if the spell wasn't casted, then take back any extra mana that was given to the bot to cast that spell
-	if(!result) {
+	if (!result) {
 		SetMana(hasMana);
-		extraMana = false;
-	}
-	else { //handle spell recast and recast timers
-		//if(GetClass() == BARD && IsGroupSpell(AIspells[i].spellid)) {
-		//	// Bard buff songs have been moved to their own npc spell type..
-		//	// Buff stacking is now checked as opposed to manipulating the timer to avoid rapid casting
-
-		//	//AIspells[i].time_cancast = (spells[AIspells[i].spellid].recast_time > (spells[AIspells[i].spellid].buffduration * 6000)) ? Timer::GetCurrentTime() + spells[AIspells[i].spellid].recast_time : Timer::GetCurrentTime() + spells[AIspells[i].spellid].buffduration * 6000;
-		//	//spellend_timer.Start(spells[AIspells[i].spellid].cast_time);
-		//}
-		//else
-		//	AIspells[i].time_cancast = Timer::GetCurrentTime() + spells[AIspells[i].spellid].recast_time;
-
-		AIspells[i].time_cancast = Timer::GetCurrentTime() + spells[AIspells[i].spellid].recast_time;
-
-		if(spells[AIspells[i].spellid].EndurTimerIndex > 0) {
-			SetSpellRecastTimer(spells[AIspells[i].spellid].EndurTimerIndex, spells[AIspells[i].spellid].recast_time);
-		}
 	}
 
 	return result;
 }
 
 bool Bot::AI_PursueCastCheck() {
+	if (GetAppearance() == eaDead || delaytimer || spellend_timer.Enabled() || IsFeared() || IsSilenced() || IsAmnesiad() || GetHP() < 0) {
+		return false;
+	}
+
 	bool result = false;
 
-	if (AIautocastspell_timer->Check(false)) {
+	if (GetTarget() && AIautocastspell_timer->Check(false)) {
+
+		LogAIDetail("Bot Pursue autocast check triggered: [{}]", GetCleanName());
+		LogBotSpellChecksDetail("{} says, 'AI_PursueCastCheck started.'", GetCleanName());
 
 		AIautocastspell_timer->Disable();	//prevent the timer from going off AGAIN while we are casting.
 
-		Log.Out(Logs::Detail, Logs::AI, "Bot Engaged (pursuing) autocast check triggered. Trying to cast offensive spells.");
-
-		if(!AICastSpell(GetTarget(), 100, SpellType_Snare)) {
-			if(!AICastSpell(GetTarget(), 100, SpellType_Lifetap)) {
-				if(!AICastSpell(GetTarget(), 100, SpellType_Nuke)) {
-					/*AIautocastspell_timer->Start(RandomTimer(500, 2000), false);
-					result = true;*/
-					result = true;
-				}
-
-				result = true;
-			}
-
-			result = true;
+		if (!IsAttackAllowed(GetTarget())) {
+			return false;
 		}
 
-		if(!AIautocastspell_timer->Enabled())
-			AIautocastspell_timer->Start(RandomTimer(100, 250), false);
+		auto cast_order = GetSpellTypesPrioritized(BotPriorityCategories::Pursue);
+		Mob* tar = nullptr;
+
+		for (auto& current_cast : cast_order) {
+			if (current_cast.priority == 0) {
+				SetSpellTypeAITimer(current_cast.spellType, RuleI(Bots, AICastSpellTypeHeldDelay));
+				LogBotSpellChecksDetail("{} says, '[{}] is priority 0, skipping.'", GetCleanName(), GetSpellTypeNameByID(current_cast.spellType));
+				continue;
+			}
+
+			if (!RuleB(Bots, AllowAIMez) && (current_cast.spellType == BotSpellTypes::AEMez || current_cast.spellType == BotSpellTypes::Mez)) {
+				continue;
+			}
+
+			if (IsCommandedBotSpellType(current_cast.spellType)) { // Unsupported by AI currently.
+				continue;
+			}
+
+			if (AIBot_spells_by_type[current_cast.spellType].empty() && AIBot_spells_by_type[GetParentSpellType(current_cast.spellType)].empty()) {
+				continue;
+			}
+
+			if (!SpellTypeAIDelayCheck(current_cast.spellType)) {
+				continue;
+			}
+
+			result = AttemptAICastSpell(current_cast.spellType, nullptr);
+
+			if (!result && IsBotSpellTypeBeneficial(current_cast.spellType)) {
+				result = AttemptCloseBeneficialSpells(current_cast.spellType);
+			}
+
+			SetSpellTypeAITimer(current_cast.spellType, RuleI(Bots, AICastSpellTypeDelay));
+
+			if (result) {
+				break;
+			}
+		}
+
+		if (!AIautocastspell_timer->Enabled()) {
+			AIautocastspell_timer->Start(RandomTimer(RuleI(Bots, MinDelayBetweenInCombatCastAttempts), RuleI(Bots, MaxDelayBetweenInCombatCastAttempts)), false);
+		}
 	}
 
 	return result;
 }
 
 bool Bot::AI_IdleCastCheck() {
+	if (GetAppearance() == eaDead || delaytimer || spellend_timer.Enabled() || IsFeared() || IsSilenced() || IsAmnesiad() || GetHP() < 0) {
+		return false;
+	}
+
 	bool result = false;
 
 	if (AIautocastspell_timer->Check(false)) {
-#if BotAI_DEBUG_Spells >= 25
-		Log.Out(Logs::Detail, Logs::AI, "Bot Non-Engaged autocast check triggered: %s", this->GetCleanName());
-#endif
+
+		LogAIDetail("Bot Non-Engaged autocast check triggered: [{}]", GetCleanName());
+		LogBotSpellChecksDetail("{} says, 'AI_IdleCastCheck started.'", GetCleanName());
+
 		AIautocastspell_timer->Disable();	//prevent the timer from going off AGAIN while we are casting.
 
 		bool pre_combat = false;
-		Mob* test_against = nullptr;
+		Client* test_against = nullptr;
 
-		if (HasGroup() && GetGroup()->GetLeader() && GetGroup()->GetLeader()->IsClient())
-			test_against = GetGroup()->GetLeader();
-		else if (GetOwner() && GetOwner()->IsClient())
-			test_against = GetOwner();
-
-		if (test_against && test_against->GetTarget() && test_against->GetTarget()->IsNPC() && !test_against->GetTarget()->IsPet())
-			pre_combat = true;
-
-		//Ok, IdleCastCheck depends of class.
-		switch (GetClass()) {
-		// Healers WITHOUT pets will check if a heal is needed before buffing.
-		case CLERIC:
-		case PALADIN:
-		case RANGER: {
-			if (!entity_list.Bot_AICheckCloseBeneficialSpells(this, 100, BotAISpellRange, SpellType_Cure)) {
-				if (!AICastSpell(this, 100, SpellType_Heal)) {
-					if (!entity_list.Bot_AICheckCloseBeneficialSpells(this, 100, BotAISpellRange, SpellType_Heal)) {
-						if (!AICastSpell(this, 100, SpellType_Buff)) {
-							if (!entity_list.Bot_AICheckCloseBeneficialSpells(this, 100, BotAISpellRange, SpellType_Buff)) {
-								//
-							}
-						}
-					}
-				}
-			}
-
-			result = true;
-			break;
+		if (HasGroup() && GetGroup()->GetLeader() && GetGroup()->GetLeader()->IsClient()) {
+			test_against = GetGroup()->GetLeader()->CastToClient();
 		}
-		// Pets class will first cast their pet, then buffs
-		case DRUID:
-		case MAGICIAN:
-		case SHADOWKNIGHT:
-		case SHAMAN:
-		case NECROMANCER:
-		case ENCHANTER:
-		case BEASTLORD: {
-			if (!entity_list.Bot_AICheckCloseBeneficialSpells(this, 100, BotAISpellRange, SpellType_Cure)) {
-				if (!AICastSpell(this, 100, SpellType_Pet)) {
-					if (!AICastSpell(this, 100, SpellType_Heal)) {
-						if (!entity_list.Bot_AICheckCloseBeneficialSpells(this, 100, BotAISpellRange, SpellType_Heal)) {
-							if (!AICastSpell(this, 100, SpellType_Buff)) {
-								if (!AICastSpell(GetPet(), 100, SpellType_Heal)) {
-									if (!entity_list.Bot_AICheckCloseBeneficialSpells(this, 100, BotAISpellRange, SpellType_Buff)) {
-										//
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-
-			result = true;
-			break;
-		}
-		case WIZARD: { // This can eventually be move into the BEASTLORD case handler once pre-combat is fully implemented
-			if (pre_combat) {
-				if (!entity_list.Bot_AICheckCloseBeneficialSpells(this, 100, BotAISpellRange, SpellType_Cure)) {
-					if (!AICastSpell(this, 100, SpellType_Pet)) {
-						if (!AICastSpell(this, 100, SpellType_Heal)) {
-							if (!entity_list.Bot_AICheckCloseBeneficialSpells(this, 100, BotAISpellRange, SpellType_Heal)) {
-								if (!AICastSpell(this, 100, SpellType_Buff)) {
-									if (!AICastSpell(GetPet(), 100, SpellType_Heal)) {
-										if (!entity_list.Bot_AICheckCloseBeneficialSpells(this, 100, BotAISpellRange, SpellType_PreCombatBuff)) {
-											if (!entity_list.Bot_AICheckCloseBeneficialSpells(this, 100, BotAISpellRange, SpellType_Buff)) {
-												//
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-			else {
-				if (!entity_list.Bot_AICheckCloseBeneficialSpells(this, 100, BotAISpellRange, SpellType_Cure)) {
-					if (!AICastSpell(this, 100, SpellType_Pet)) {
-						if (!AICastSpell(this, 100, SpellType_Heal)) {
-							if (!entity_list.Bot_AICheckCloseBeneficialSpells(this, 100, BotAISpellRange, SpellType_Heal)) {
-								if (!AICastSpell(this, 100, SpellType_Buff)) {
-									if (!AICastSpell(GetPet(), 100, SpellType_Heal)) {
-										if (!entity_list.Bot_AICheckCloseBeneficialSpells(this, 100, BotAISpellRange, SpellType_Buff)) {
-											//
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-			
-			result = true;
-			break;
-		}
-		case BARD: {
-			if (pre_combat) {
-				if (!entity_list.Bot_AICheckCloseBeneficialSpells(this, 100, BotAISpellRange, SpellType_Cure)) {
-					if (!AICastSpell(this, 100, SpellType_PreCombatBuffSong)) {
-						if (!AICastSpell(this, 100, SpellType_InCombatBuffSong)) {
-							//
-						}
-					}
-				}
-			}
-			else {
-				if (!entity_list.Bot_AICheckCloseBeneficialSpells(this, 100, BotAISpellRange, SpellType_Cure)) {
-					if (!AICastSpell(this, 100, SpellType_OutOfCombatBuffSong)) {
-						//
-					}
-				}
-			}
-
-			result = true;
-			break;
-		}
-		default:
-			break;
+		else if (GetOwner() && GetOwner()->IsClient()) {
+			test_against = GetOwner()->CastToClient();
 		}
 
-		if(!AIautocastspell_timer->Enabled())
-			AIautocastspell_timer->Start(RandomTimer(500, 2000), false); // avg human response is much less than 5 seconds..even for non-combat situations...
+		if (test_against) {
+			pre_combat = test_against->GetBotPrecombat();
+		}
+
+		auto cast_order = GetSpellTypesPrioritized(BotPriorityCategories::Idle);
+		Mob* tar = nullptr;
+
+		for (auto& current_cast : cast_order) {
+			if (current_cast.priority == 0) {
+				SetSpellTypeAITimer(current_cast.spellType, RuleI(Bots, AICastSpellTypeHeldDelay));
+				LogBotSpellChecksDetail("{} says, '[{}] is priority 0, skipping.'", GetCleanName(), GetSpellTypeNameByID(current_cast.spellType));
+				continue;
+			}
+
+			if (!pre_combat && (current_cast.spellType == BotSpellTypes::PreCombatBuff || current_cast.spellType == BotSpellTypes::PreCombatBuffSong)) {
+				continue;
+			}
+
+			if (!RuleB(Bots, AllowAIMez) && (current_cast.spellType == BotSpellTypes::AEMez || current_cast.spellType == BotSpellTypes::Mez)) {
+				continue;
+			}
+
+			if (IsCommandedBotSpellType(current_cast.spellType)) { // Unsupported by AI currently.
+				continue;
+			}
+
+			if (!IsBotSpellTypeBeneficial(current_cast.spellType)) {
+				continue;
+			}
+
+			if (AIBot_spells_by_type[current_cast.spellType].empty() && AIBot_spells_by_type[GetParentSpellType(current_cast.spellType)].empty()) {
+				continue;
+			}
+
+			if (!SpellTypeAIDelayCheck(current_cast.spellType)) {
+				continue;
+			}
+
+			result = AttemptAICastSpell(current_cast.spellType, nullptr);
+
+			if (result) {
+				break;
+			}
+
+			result = AttemptCloseBeneficialSpells(current_cast.spellType);
+
+			SetSpellTypeAITimer(current_cast.spellType, RuleI(Bots, AICastSpellTypeDelay));
+
+			if (result) {
+				break;
+			}
+		}
+
+		if (!AIautocastspell_timer->Enabled()) {
+			AIautocastspell_timer->Start(RandomTimer(RuleI(Bots, MinDelayBetweenOutCombatCastAttempts), RuleI(Bots, MaxDelayBetweenOutCombatCastAttempts)), false);
+		}
 	}
 
 	return result;
 }
 
 bool Bot::AI_EngagedCastCheck() {
+	if (GetAppearance() == eaDead || delaytimer || spellend_timer.Enabled() || IsFeared() || IsSilenced() || IsAmnesiad() || GetHP() < 0) {
+		return false;
+	}
+
 	bool result = false;
-	bool failedToCast = false;
 
 	if (GetTarget() && AIautocastspell_timer->Check(false)) {
 
+		LogAIDetail("Bot Engaged autocast check triggered: [{}]", GetCleanName());
+		LogBotSpellChecksDetail("{} says, 'AI_EngagedCastCheck started.'", GetCleanName());
+
 		AIautocastspell_timer->Disable();	//prevent the timer from going off AGAIN while we are casting.
 
-		uint8 botClass = GetClass();
-		BotStanceType botStance = GetBotStance();
-		bool mayGetAggro = HasOrMayGetAggro();
+		if (!IsAttackAllowed(GetTarget())) {
+			return false;
+		}
 
-		Log.Out(Logs::Detail, Logs::AI, "Engaged autocast check triggered (BOTS). Trying to cast healing spells then maybe offensive spells.");
+		auto cast_order = GetSpellTypesPrioritized(BotPriorityCategories::Engaged);
+		Mob* tar = nullptr;
 
-		if(botClass == CLERIC) {
-			if(!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Escape), SpellType_Escape)) {
-				if(!AICastSpell(this, GetChanceToCastBySpellType(SpellType_Heal), SpellType_Heal)) {
-					if(!entity_list.Bot_AICheckCloseBeneficialSpells(this, GetChanceToCastBySpellType(SpellType_Heal), BotAISpellRange, SpellType_Heal)) {
-						if(!AICastSpell(GetTarget(), mayGetAggro?0:GetChanceToCastBySpellType(SpellType_Nuke), SpellType_Nuke)) {
-							if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_InCombatBuff), SpellType_InCombatBuff)) {
-								//AIautocastspell_timer->Start(RandomTimer(100, 250), false);		// Do not give healer classes a lot of time off or your tank's die
-								failedToCast = true;
-							}
-						}
-					}
-				}
+		for (auto& current_cast : cast_order) {
+			if (current_cast.priority == 0) {
+				SetSpellTypeAITimer(current_cast.spellType, RuleI(Bots, AICastSpellTypeHeldDelay));
+				LogBotSpellChecksDetail("{} says, '[{}] is priority 0, skipping.'", GetCleanName(), GetSpellTypeNameByID(current_cast.spellType));
+				continue;
 			}
-		}
-		else if(botClass == DRUID) {
-			if(!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Escape), SpellType_Escape)) {
-				if(!AICastSpell(this, GetChanceToCastBySpellType(SpellType_Heal), SpellType_Heal)) {
-					if(!entity_list.Bot_AICheckCloseBeneficialSpells(this, GetChanceToCastBySpellType(SpellType_Heal), BotAISpellRange, SpellType_Heal)) {
-						if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Debuff), SpellType_Debuff)) {
-							if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_DOT), SpellType_DOT)) {
-								if(!AICastSpell(GetTarget(), mayGetAggro?0:GetChanceToCastBySpellType(SpellType_Nuke), SpellType_Nuke)) {
-									//AIautocastspell_timer->Start(RandomTimer(100, 250), false);		// Do not give healer classes a lot of time off or your tank's die
-									failedToCast = true;
-								}
-							}
-						}
-					}
-				}
+
+			if (!RuleB(Bots, AllowAIMez) && (current_cast.spellType == BotSpellTypes::AEMez || current_cast.spellType == BotSpellTypes::Mez)) {
+				continue;
 			}
-		}
-		else if(botClass == SHAMAN) {
-			if(!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Escape), SpellType_Escape)) {
-				if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Slow), SpellType_Slow)) {
-					if(!AICastSpell(this, GetChanceToCastBySpellType(SpellType_Heal), SpellType_Heal)) {
-						if(!entity_list.Bot_AICheckCloseBeneficialSpells(this, GetChanceToCastBySpellType(SpellType_Heal), BotAISpellRange, SpellType_Heal)) {
-							if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Debuff), SpellType_Debuff)) {
-								if (!AICastSpell(GetPet(), GetChanceToCastBySpellType(SpellType_Heal), SpellType_Heal)) {
-									if(!AICastSpell(this, GetChanceToCastBySpellType(SpellType_InCombatBuff), SpellType_InCombatBuff)) {
-										if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_DOT), SpellType_DOT)) {
-											if(!AICastSpell(GetTarget(), mayGetAggro?0:GetChanceToCastBySpellType(SpellType_Nuke), SpellType_Nuke)) {
-												//AIautocastspell_timer->Start(RandomTimer(100, 250), false);		// Do not give healer classes a lot of time off or your tank's die
-												failedToCast = true;
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-				}
+
+			if (IsCommandedBotSpellType(current_cast.spellType)) { // Unsupported by AI currently.
+				continue;
 			}
-		}
-		else if(botClass == RANGER) {
-			if(!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Escape), SpellType_Escape)) {
-				if (!AICastSpell(this, GetChanceToCastBySpellType(SpellType_Heal), SpellType_Heal)) {
-					if (!entity_list.Bot_AICheckCloseBeneficialSpells(this, GetChanceToCastBySpellType(SpellType_Heal), BotAISpellRange, SpellType_Heal)) {
-						if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_DOT), SpellType_DOT)) {
-							if (!AICastSpell(GetTarget(), mayGetAggro?0:GetChanceToCastBySpellType(SpellType_Nuke), SpellType_Nuke)) {
-								//
-								failedToCast = true;
-							}
-						}
-					}
-				}
+
+			if (AIBot_spells_by_type[current_cast.spellType].empty() && AIBot_spells_by_type[GetParentSpellType(current_cast.spellType)].empty()) {
+				continue;
 			}
-		}
-		else if(botClass == BEASTLORD) {
-			if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Slow), SpellType_Slow)) {
-				if (!AICastSpell(this, GetChanceToCastBySpellType(SpellType_Heal), SpellType_Heal)) {
-					if (!entity_list.Bot_AICheckCloseBeneficialSpells(this, GetChanceToCastBySpellType(SpellType_Heal), BotAISpellRange, SpellType_Heal)) {
-						if (!AICastSpell(GetPet(), GetChanceToCastBySpellType(SpellType_Heal), SpellType_Heal)) {
-							if (!AICastSpell(this, GetChanceToCastBySpellType(SpellType_Pet), SpellType_Pet)) {
-								if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_DOT), SpellType_DOT)) {
-									if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Debuff), SpellType_Debuff)) {
-										if(!AICastSpell(GetTarget(), mayGetAggro?0:GetChanceToCastBySpellType(SpellType_Nuke), SpellType_Nuke)) {
-											//
-											failedToCast = true;
-										}
-									}
-								}
-							}
-						}
-					}
-				}
+
+			if (!SpellTypeAIDelayCheck(current_cast.spellType)) {
+				continue;
 			}
-		}
-		else if(botClass == WIZARD) {
-			if(!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Escape), SpellType_Escape)) {
-				if (!AICastSpell(GetTarget(), mayGetAggro?0:GetChanceToCastBySpellType(SpellType_Nuke), SpellType_Nuke)) {
-					//
-					failedToCast = true;
-				}
+
+			result = AttemptAICastSpell(current_cast.spellType, nullptr);
+
+			SetSpellTypeAITimer(current_cast.spellType, RuleI(Bots, AICastSpellTypeDelay));
+
+			if (!result && IsBotSpellTypeBeneficial(current_cast.spellType)) {
+				result = AttemptCloseBeneficialSpells(current_cast.spellType);
 			}
-		}
-		else if(botClass == PALADIN) {
-			if(!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Escape), SpellType_Escape)) {
-				if (!AICastSpell(this, GetChanceToCastBySpellType(SpellType_Heal), SpellType_Heal)) {
-					if (!entity_list.Bot_AICheckCloseBeneficialSpells(this, GetChanceToCastBySpellType(SpellType_Heal), BotAISpellRange, SpellType_Heal)) {
-						if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Nuke), SpellType_Nuke)) {
-							if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_InCombatBuff), SpellType_InCombatBuff)) {
-								//
-								failedToCast = true;
-							}
-						}
-					}
-				}
-			}
-		}
-		else if(botClass == SHADOWKNIGHT) {
-			if(!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Escape), SpellType_Escape)) {
-				if (!AICastSpell(this, GetChanceToCastBySpellType(SpellType_Pet), SpellType_Pet)) {
-					if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Lifetap), SpellType_Lifetap)) {
-						if (!AICastSpell(GetPet(), GetChanceToCastBySpellType(SpellType_Heal), SpellType_Heal)) {
-							if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_DOT), SpellType_DOT)) {
-								if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Debuff), SpellType_Debuff)) {
-									if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Nuke), SpellType_Nuke)) {
-										//
-										failedToCast = true;
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-		else if(botClass == MAGICIAN) {
-			if (!AICastSpell(this, GetChanceToCastBySpellType(SpellType_Pet), SpellType_Pet)) {
-				if (!AICastSpell(GetPet(), GetChanceToCastBySpellType(SpellType_Heal), SpellType_Heal)) {
-					if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Debuff), SpellType_Debuff)) {
-						if (!AICastSpell(GetTarget(), mayGetAggro?0:GetChanceToCastBySpellType(SpellType_Nuke), SpellType_Nuke)) {
-							//
-							failedToCast = true;
-						}
-					}
-				}
-			}
-		}
-		else if(botClass == NECROMANCER) {
-			if(!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Escape), SpellType_Escape)) {
-				if (!AICastSpell(this, GetChanceToCastBySpellType(SpellType_Pet), SpellType_Pet)) {
-					if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Lifetap), SpellType_Lifetap)) {
-						if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_DOT), SpellType_DOT)) {
-							if (!AICastSpell(GetPet(), GetChanceToCastBySpellType(SpellType_Heal), SpellType_Heal)) {
-								if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Debuff), SpellType_Debuff)) {
-									if (!AICastSpell(GetTarget(), mayGetAggro?0:GetChanceToCastBySpellType(SpellType_Nuke), SpellType_Nuke)) {
-										//
-										failedToCast = true;
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-		else if(botClass == ENCHANTER) {
-			if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Mez), SpellType_Mez)) {
-				if(!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Escape), SpellType_Escape)) {
-					if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Slow), SpellType_Slow)) {
-						if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Debuff), SpellType_Debuff)) {
-							if (!AICastSpell(GetTarget(), mayGetAggro?0:GetChanceToCastBySpellType(SpellType_DOT), SpellType_DOT)) {
-								if (!AICastSpell(GetTarget(), mayGetAggro?0:GetChanceToCastBySpellType(SpellType_Nuke), SpellType_Nuke)) {
-									//
-									failedToCast = true;
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-		else if(botClass == BARD) {
-			if (!entity_list.Bot_AICheckCloseBeneficialSpells(this, GetChanceToCastBySpellType(SpellType_HateRedux), BotAISpellRange, SpellType_HateRedux)) {
-				if (!AICastSpell(this, GetChanceToCastBySpellType(SpellType_InCombatBuffSong), SpellType_InCombatBuffSong)) {
-					if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Slow), SpellType_Slow)) {
-						if (!AICastSpell(GetTarget(), mayGetAggro ? 0 : GetChanceToCastBySpellType(SpellType_DOT), SpellType_DOT)) {// Bards will use their dot songs
-							if (!AICastSpell(GetTarget(), mayGetAggro ? 0 : GetChanceToCastBySpellType(SpellType_Nuke), SpellType_Nuke)) {// Bards will use their nuke songs
-								if (!AICastSpell(GetTarget(), GetChanceToCastBySpellType(SpellType_Escape), SpellType_Escape)) {// Bards will use their escape songs
-									//
-									failedToCast = true;
-								}
-							}
-						}
-					}
-				}
+
+			if (result) {
+				break;
 			}
 		}
 
-		if(!AIautocastspell_timer->Enabled()) {
-			AIautocastspell_timer->Start(RandomTimer(150, 300), false);
+		if (!AIautocastspell_timer->Enabled()) {
+			AIautocastspell_timer->Start(RandomTimer(RuleI(Bots, MinDelayBetweenInCombatCastAttempts), RuleI(Bots, MaxDelayBetweenInCombatCastAttempts)), false);
 		}
-
-		if(!failedToCast)
-			result = true;
 	}
 
 	return result;
@@ -1524,8 +836,8 @@ bool Bot::AIHealRotation(Mob* tar, bool useFastHeals) {
 	if (!AI_HasSpells())
 		return false;
 
-	if(tar->GetAppearance() == eaDead) {
-		if((tar->IsClient() && tar->CastToClient()->GetFeigned()) || tar->IsBot()) {
+	if (tar->GetAppearance() == eaDead) {
+		if ((tar->IsClient() && tar->CastToClient()->GetFeigned()) || tar->IsBot()) {
 			// do nothing
 		}
 		else {
@@ -1543,72 +855,100 @@ bool Bot::AIHealRotation(Mob* tar, bool useFastHeals) {
 	botSpell.ManaCost = 0;
 
 	if (useFastHeals) {
-		botSpell = GetBestBotSpellForRegularSingleTargetHeal(this);
+		botSpell = GetBestBotSpellForRegularSingleTargetHeal(this, tar);
 
-		if(botSpell.SpellId == 0)
-			botSpell = GetBestBotSpellForFastHeal(this);
+		if (!IsValidSpell(botSpell.SpellId))
+			botSpell = GetBestBotSpellForFastHeal(this, tar);
 	}
 	else {
-		botSpell = GetBestBotSpellForPercentageHeal(this);
+		botSpell = GetBestBotSpellForPercentageHeal(this, tar);
 
-		if(botSpell.SpellId == 0)
-			botSpell = GetBestBotSpellForRegularSingleTargetHeal(this);
-
-		if(botSpell.SpellId == 0)
-			botSpell = GetFirstBotSpellForSingleTargetHeal(this);
-
-		if(botSpell.SpellId == 0){
-			botSpell = GetFirstBotSpellBySpellType(this, SpellType_Heal);
+		if (!IsValidSpell(botSpell.SpellId)) {
+			botSpell = GetBestBotSpellForRegularSingleTargetHeal(this, tar);
+		}
+		if (!IsValidSpell(botSpell.SpellId)) {
+			botSpell = GetFirstBotSpellForSingleTargetHeal(this, tar);
+		}
+		if (!IsValidSpell(botSpell.SpellId)) {
+			botSpell = GetFirstBotSpellBySpellType(this, BotSpellTypes::RegularHeal);
 		}
 	}
 
-#if BotAI_DEBUG_Spells >= 10
-	Log.Out(Logs::Detail, Logs::AI, "Bot::AIHealRotation: heal spellid = %u, fastheals = %c, casterlevel = %u",
+	LogAIDetail("heal spellid [{}] fastheals [{}] casterlevel [{}]",
 		botSpell.SpellId, ((useFastHeals) ? ('T') : ('F')), GetLevel());
-#endif
-#if BotAI_DEBUG_Spells >= 25
-	Log.Out(Logs::Detail, Logs::AI, "Bot::AIHealRotation: target = %s, current_time = %u, donthealmebefore = %u", tar->GetCleanName(), Timer::GetCurrentTime(), tar->DontHealMeBefore());
-#endif
+
+	LogAIDetail("target [{}] current_time [{}] donthealmebefore [{}]", tar->GetCleanName(), Timer::GetCurrentTime(), tar->DontHealMeBefore());
 
 	// If there is still no spell id, then there isn't going to be one so we are done
-	if (botSpell.SpellId == 0)
+	if (!IsValidSpell(botSpell.SpellId)) {
 		return false;
+	}
 
 	// Can we cast this spell on this target?
-	if (!(spells[botSpell.SpellId].targettype == ST_GroupTeleport || spells[botSpell.SpellId].targettype == ST_Target || tar == this)
-		&& !(tar->CanBuffStack(botSpell.SpellId, botLevel, true) >= 0))
+	if (!
+		(
+			spells[botSpell.SpellId].target_type == ST_GroupTeleport ||
+			spells[botSpell.SpellId].target_type == ST_Target ||
+			tar == this
+		) &&
+		tar->CanBuffStack(botSpell.SpellId, botLevel, true) < 0
+	) {
 		return false;
+	}
 
 	uint32 TempDontHealMeBeforeTime = tar->DontHealMeBefore();
+	if (IsValidSpellRange(botSpell.SpellId, tar)) {
+		castedSpell = AIDoSpellCast(botSpell.SpellIndex, tar, botSpell.ManaCost, &TempDontHealMeBeforeTime);
+	}
 
-	castedSpell = AIDoSpellCast(botSpell.SpellIndex, tar, botSpell.ManaCost, &TempDontHealMeBeforeTime);
-
-	if(castedSpell)
-		Say("Casting %s on %s, please stay in range!", spells[botSpell.SpellId].name, tar->GetCleanName());
+	if (castedSpell) {
+		RaidGroupSay(
+			fmt::format(
+				"Casting {} on {}, please stay in range!",
+				spells[botSpell.SpellId].name,
+				tar->GetCleanName()
+			).c_str()
+		);
+	}
 
 	return castedSpell;
 }
 
-std::list<BotSpell> Bot::GetBotSpellsForSpellEffect(Bot* botCaster, int spellEffect) {
+std::list<BotSpell> Bot::GetBotSpellsForSpellEffect(Bot* caster, uint16 spell_type, int spell_effect) {
 	std::list<BotSpell> result;
 
-	if(botCaster && botCaster->AI_HasSpells()) {
-		std::vector<AISpells_Struct> botSpellList = botCaster->GetBotSpells();
+	if (!caster) {
+		return result;
+	}
 
-		for (int i = botSpellList.size() - 1; i >= 0; i--) {
-			if (botSpellList[i].spellid <= 0 || botSpellList[i].spellid >= SPDAT_RECORDS) {
-				// this is both to quit early to save cpu and to avoid casting bad spells
-				// Bad info from database can trigger this incorrectly, but that should be fixed in DB, not here
+	if (auto bot_owner = caster->GetBotOwner(); !bot_owner) {
+		return result;
+	}
+
+	if (caster->AI_HasSpells()) {
+		const std::vector<BotSpells_wIndex>& bot_spell_list = caster->BotGetSpellsByType(spell_type);
+
+		for (int i = bot_spell_list.size() - 1; i >= 0; i--) {
+			if (!IsValidSpell(bot_spell_list[i].spellid)) {
 				continue;
 			}
 
-			if(IsEffectInSpell(botSpellList[i].spellid, spellEffect)) {
-				BotSpell botSpell;
-				botSpell.SpellId = botSpellList[i].spellid;
-				botSpell.SpellIndex = i;
-				botSpell.ManaCost = botSpellList[i].manacost;
+			if (BotRequiresLoSToCast(spell_type, bot_spell_list[i].spellid) && !caster->HasLoS()) {
+				continue;
+			}
 
-				result.push_back(botSpell);
+			if (
+				caster->CheckSpellRecastTimer(bot_spell_list[i].spellid) &&
+				(bot_spell_list[i].type == spell_type || bot_spell_list[i].type == GetParentSpellType(spell_type)) &&
+				caster->IsValidSpellTypeBySpellID(spell_type, bot_spell_list[i].spellid) &&
+				(IsEffectInSpell(bot_spell_list[i].spellid, spell_effect) || GetSpellTriggerSpellID(bot_spell_list[i].spellid, spell_effect))
+			) {
+				BotSpell bot_spell;
+				bot_spell.SpellId = bot_spell_list[i].spellid;
+				bot_spell.SpellIndex = bot_spell_list[i].index;
+				bot_spell.ManaCost = bot_spell_list[i].manacost;
+
+				result.push_back(bot_spell);
 			}
 		}
 	}
@@ -1616,114 +956,206 @@ std::list<BotSpell> Bot::GetBotSpellsForSpellEffect(Bot* botCaster, int spellEff
 	return result;
 }
 
-std::list<BotSpell> Bot::GetBotSpellsForSpellEffectAndTargetType(Bot* botCaster, int spellEffect, SpellTargetType targetType) {
+std::list<BotSpell> Bot::GetBotSpellsForSpellEffectAndTargetType(Bot* caster, uint16 spell_type, int spell_effect, SpellTargetType target_type) {
 	std::list<BotSpell> result;
 
-	if(botCaster && botCaster->AI_HasSpells()) {
-		std::vector<AISpells_Struct> botSpellList = botCaster->GetBotSpells();
+	if (!caster) {
+		return result;
+	}
 
-		for (int i = botSpellList.size() - 1; i >= 0; i--) {
-			if (botSpellList[i].spellid <= 0 || botSpellList[i].spellid >= SPDAT_RECORDS) {
-				// this is both to quit early to save cpu and to avoid casting bad spells
-				// Bad info from database can trigger this incorrectly, but that should be fixed in DB, not here
+	if (auto bot_owner = caster->GetBotOwner(); !bot_owner) {
+		return result;
+	}
+
+	if (caster->AI_HasSpells()) {
+		const std::vector<BotSpells_wIndex>& bot_spell_list = caster->BotGetSpellsByType(spell_type);
+
+		for (int i = bot_spell_list.size() - 1; i >= 0; i--) {
+			if (!IsValidSpell(bot_spell_list[i].spellid)) {
 				continue;
 			}
 
-			if(IsEffectInSpell(botSpellList[i].spellid, spellEffect)) {
-				if(spells[botSpellList[i].spellid].targettype == targetType) {
-					BotSpell botSpell;
-					botSpell.SpellId = botSpellList[i].spellid;
-					botSpell.SpellIndex = i;
-					botSpell.ManaCost = botSpellList[i].manacost;
+			if (BotRequiresLoSToCast(spell_type, bot_spell_list[i].spellid) && !caster->HasLoS()) {
+				continue;
+			}
 
-					result.push_back(botSpell);
+			if (
+				caster->CheckSpellRecastTimer(bot_spell_list[i].spellid) &&
+				(bot_spell_list[i].type == spell_type || bot_spell_list[i].type == GetParentSpellType(spell_type)) &&
+				caster->IsValidSpellTypeBySpellID(spell_type, bot_spell_list[i].spellid) &&
+				(
+					IsEffectInSpell(bot_spell_list[i].spellid, spell_effect) ||
+					GetSpellTriggerSpellID(bot_spell_list[i].spellid, spell_effect)
+				) &&
+				(target_type == ST_TargetOptional || spells[bot_spell_list[i].spellid].target_type == target_type)
+			) {
+				BotSpell bot_spell;
+				bot_spell.SpellId = bot_spell_list[i].spellid;
+				bot_spell.SpellIndex = bot_spell_list[i].index;
+				bot_spell.ManaCost = bot_spell_list[i].manacost;
+				result.push_back(bot_spell);
+			}
+		}
+	}
+
+	return result;
+}
+
+std::list<BotSpell> Bot::GetBotSpellsBySpellType(Bot* caster, uint16 spell_type) {
+	std::list<BotSpell> result;
+
+	if (!caster) {
+		return result;
+	}
+
+	if (auto bot_owner = caster->GetBotOwner(); !bot_owner) {
+		return result;
+	}
+
+	if (caster->AI_HasSpells()) {
+		const std::vector<BotSpells_wIndex>& bot_spell_list = caster->BotGetSpellsByType(spell_type);
+
+		for (int i = bot_spell_list.size() - 1; i >= 0; i--) {
+			if (!IsValidSpell(bot_spell_list[i].spellid)) {
+				continue;
+			}
+
+			if (BotRequiresLoSToCast(spell_type, bot_spell_list[i].spellid) && !caster->HasLoS()) {
+				continue;
+			}
+
+			if (
+				caster->CheckSpellRecastTimer(bot_spell_list[i].spellid) &&
+				(bot_spell_list[i].type == spell_type || bot_spell_list[i].type == GetParentSpellType(spell_type)) &&
+				caster->IsValidSpellTypeBySpellID(spell_type, bot_spell_list[i].spellid)
+			) {
+				BotSpell bot_spell;
+				bot_spell.SpellId = bot_spell_list[i].spellid;
+				bot_spell.SpellIndex = bot_spell_list[i].index;
+				bot_spell.ManaCost = bot_spell_list[i].manacost;
+
+				result.push_back(bot_spell);
+			}
+		}
+	}
+
+	return result;
+}
+
+std::vector<BotSpell_wPriority> Bot::GetPrioritizedBotSpellsBySpellType(Bot* caster, uint16 spell_type, Mob* tar, bool AE, uint16 sub_target_type, uint16 sub_type) {
+	std::vector<BotSpell_wPriority> result;
+
+	if (caster && caster->AI_HasSpells()) {
+		const std::vector<BotSpells_wIndex>& bot_spell_list = caster->BotGetSpellsByType(spell_type);
+
+		for (int i = bot_spell_list.size() - 1; i >= 0; i--) {
+			if (!IsValidSpell(bot_spell_list[i].spellid)) {
+				continue;
+			}
+
+			if (BotRequiresLoSToCast(spell_type, bot_spell_list[i].spellid) && !caster->HasLoS()) {
+				continue;
+			}
+
+			if (spell_type == BotSpellTypes::HateRedux && caster->GetClass() == Class::Bard) {
+				if (spells[bot_spell_list[i].spellid].target_type != ST_Target) {
+					continue;
+				}
+			}
+
+			if (
+				caster->CheckSpellRecastTimer(bot_spell_list[i].spellid) &&
+				(bot_spell_list[i].type == spell_type || bot_spell_list[i].type == GetParentSpellType(spell_type)) &&
+				caster->IsValidSpellTypeBySpellID(spell_type, bot_spell_list[i].spellid)
+			) {
+				if (
+					caster->IsCommandedSpell() &&
+					(
+						!caster->IsValidSpellTypeSubType(spell_type, sub_target_type, bot_spell_list[i].spellid) ||
+						!caster->IsValidSpellTypeSubType(spell_type, sub_type, bot_spell_list[i].spellid)
+					)
+				) {
+					continue;
+				}
+
+				if (!AE && IsAnyAESpell(bot_spell_list[i].spellid) && !IsGroupSpell(bot_spell_list[i].spellid)) {
+					continue;
+				}
+				else if (AE && !IsAnyAESpell(bot_spell_list[i].spellid)) {
+					continue;
+				}
+
+				if (
+					!caster->IsInGroupOrRaid(tar, true) &&
+					(
+						!RuleB(Bots, EnableBotTGB) ||
+						(
+							IsGroupSpell(bot_spell_list[i].spellid) &&
+							!IsTGBCompatibleSpell(bot_spell_list[i].spellid)
+						)
+					)
+				) {
+					continue;
+				}
+
+				if (!IsPBAESpell(bot_spell_list[i].spellid) && !caster->CastChecks(bot_spell_list[i].spellid, tar, spell_type, false, IsAEBotSpellType(spell_type))) {
+					continue;
+				}
+
+				if (
+					caster->IsCommandedSpell() ||
+					!AE ||
+					!BotSpellTypeRequiresAEChecks(spell_type) ||
+					caster->HasValidAETarget(caster, bot_spell_list[i].spellid, spell_type, tar)
+				) {
+					BotSpell_wPriority bot_spell;
+					bot_spell.SpellId = bot_spell_list[i].spellid;
+					bot_spell.SpellIndex = bot_spell_list[i].index;
+					bot_spell.ManaCost = bot_spell_list[i].manacost;
+					bot_spell.Priority = bot_spell_list[i].priority;
+
+					result.emplace_back(bot_spell);
 				}
 			}
 		}
-	}
 
-	return result;
-}
-
-std::list<BotSpell> Bot::GetBotSpellsBySpellType(Bot* botCaster, uint32 spellType) {
-	std::list<BotSpell> result;
-
-	if(botCaster && botCaster->AI_HasSpells()) {
-		std::vector<AISpells_Struct> botSpellList = botCaster->GetBotSpells();
-
-		for (int i = botSpellList.size() - 1; i >= 0; i--) {
-			if (botSpellList[i].spellid <= 0 || botSpellList[i].spellid >= SPDAT_RECORDS) {
-				// this is both to quit early to save cpu and to avoid casting bad spells
-				// Bad info from database can trigger this incorrectly, but that should be fixed in DB, not here
-				continue;
-			}
-
-			if(botSpellList[i].type & spellType) {
-				BotSpell botSpell;
-				botSpell.SpellId = botSpellList[i].spellid;
-				botSpell.SpellIndex = i;
-				botSpell.ManaCost = botSpellList[i].manacost;
-
-				result.push_back(botSpell);
-			}
+		if (result.size() > 1) {
+			std::sort(result.begin(), result.end(), [](BotSpell_wPriority const& l, BotSpell_wPriority const& r) {
+				return l.Priority < r.Priority;
+			});
 		}
 	}
 
 	return result;
 }
 
-std::list<BotSpell_wPriority> Bot::GetPrioritizedBotSpellsBySpellType(Bot* botCaster, uint32 spellType) {
-	std::list<BotSpell_wPriority> result;
-
-	if (botCaster && botCaster->AI_HasSpells()) {
-		std::vector<AISpells_Struct> botSpellList = botCaster->GetBotSpells();
-
-		for (int i = botSpellList.size() - 1; i >= 0; i--) {
-			if (botSpellList[i].spellid <= 0 || botSpellList[i].spellid >= SPDAT_RECORDS) {
-				// this is both to quit early to save cpu and to avoid casting bad spells
-				// Bad info from database can trigger this incorrectly, but that should be fixed in DB, not here
-				continue;
-			}
-
-			if (botSpellList[i].type & spellType) {
-				BotSpell_wPriority botSpell;
-				botSpell.SpellId = botSpellList[i].spellid;
-				botSpell.SpellIndex = i;
-				botSpell.ManaCost = botSpellList[i].manacost;
-				botSpell.Priority = botSpellList[i].priority;
-
-				result.push_back(botSpell);
-			}
-		}
-
-		if (result.size() > 1)
-			result.sort([](BotSpell_wPriority& l, BotSpell_wPriority& r) { return l.Priority < r.Priority; });
-	}
-
-	return result;
-}
-
-BotSpell Bot::GetFirstBotSpellBySpellType(Bot* botCaster, uint32 spellType) {
+BotSpell Bot::GetFirstBotSpellBySpellType(Bot* caster, uint16 spell_type) {
 	BotSpell result;
 
 	result.SpellId = 0;
 	result.SpellIndex = 0;
 	result.ManaCost = 0;
 
-	if(botCaster && botCaster->AI_HasSpells()) {
-		std::vector<AISpells_Struct> botSpellList = botCaster->GetBotSpells();
+	if (caster && caster->AI_HasSpells()) {
+		const std::vector<BotSpells_wIndex>& bot_spell_list = caster->BotGetSpellsByType(spell_type);
 
-		for (int i = botSpellList.size() - 1; i >= 0; i--) {
-			if (botSpellList[i].spellid <= 0 || botSpellList[i].spellid >= SPDAT_RECORDS) {
-				// this is both to quit early to save cpu and to avoid casting bad spells
-				// Bad info from database can trigger this incorrectly, but that should be fixed in DB, not here
+		for (int i = bot_spell_list.size() - 1; i >= 0; i--) {
+			if (!IsValidSpell(bot_spell_list[i].spellid)) {
 				continue;
 			}
 
-			if((botSpellList[i].type & spellType) && CheckSpellRecastTimers(botCaster, i)) {
-				result.SpellId = botSpellList[i].spellid;
-				result.SpellIndex = i;
-				result.ManaCost = botSpellList[i].manacost;
+			if (BotRequiresLoSToCast(spell_type, bot_spell_list[i].spellid) && !caster->HasLoS()) {
+				continue;
+			}
+
+			if (
+				caster->CheckSpellRecastTimer(bot_spell_list[i].spellid) &&
+				(bot_spell_list[i].type == spell_type || bot_spell_list[i].type == GetParentSpellType(spell_type)) &&
+				caster->IsValidSpellTypeBySpellID(spell_type, bot_spell_list[i].spellid)
+			) {
+				result.SpellId = bot_spell_list[i].spellid;
+				result.SpellIndex = bot_spell_list[i].index;
+				result.ManaCost = bot_spell_list[i].manacost;
 
 				break;
 			}
@@ -1733,22 +1165,22 @@ BotSpell Bot::GetFirstBotSpellBySpellType(Bot* botCaster, uint32 spellType) {
 	return result;
 }
 
-BotSpell Bot::GetBestBotSpellForFastHeal(Bot *botCaster) {
+BotSpell Bot::GetBestBotSpellForVeryFastHeal(Bot* caster, Mob* tar, uint16 spell_type) {
 	BotSpell result;
 
 	result.SpellId = 0;
 	result.SpellIndex = 0;
 	result.ManaCost = 0;
 
-	if(botCaster) {
-		std::list<BotSpell> botSpellList = GetBotSpellsForSpellEffect(botCaster, SE_CurrentHP);
+	if (caster) {
+		std::list<BotSpell> bot_spell_list = GetBotSpellsForSpellEffect(caster, spell_type, SpellEffect::CurrentHP);
 
-		for(std::list<BotSpell>::iterator botSpellListItr = botSpellList.begin(); botSpellListItr != botSpellList.end(); ++botSpellListItr) {
-			// Assuming all the spells have been loaded into this list by level and in descending order
-			if(IsFastHealSpell(botSpellListItr->SpellId) && CheckSpellRecastTimers(botCaster, botSpellListItr->SpellIndex)) {
-				result.SpellId = botSpellListItr->SpellId;
-				result.SpellIndex = botSpellListItr->SpellIndex;
-				result.ManaCost = botSpellListItr->ManaCost;
+		for (auto bot_spell_list_itr : bot_spell_list) {
+			if (
+				IsVeryFastHealSpell(bot_spell_list_itr.SpellId) && caster->CastChecks(bot_spell_list_itr.SpellId, tar, spell_type)) {
+				result.SpellId = bot_spell_list_itr.SpellId;
+				result.SpellIndex = bot_spell_list_itr.SpellIndex;
+				result.ManaCost = bot_spell_list_itr.ManaCost;
 
 				break;
 			}
@@ -1758,343 +1190,378 @@ BotSpell Bot::GetBestBotSpellForFastHeal(Bot *botCaster) {
 	return result;
 }
 
-BotSpell Bot::GetBestBotSpellForHealOverTime(Bot* botCaster) {
+BotSpell Bot::GetBestBotSpellForFastHeal(Bot* caster, Mob* tar, uint16 spell_type) {
 	BotSpell result;
 
 	result.SpellId = 0;
 	result.SpellIndex = 0;
 	result.ManaCost = 0;
 
-	if(botCaster) {
-		std::list<BotSpell> botHoTSpellList = GetBotSpellsForSpellEffect(botCaster, SE_HealOverTime);
-		std::vector<AISpells_Struct> botSpellList = botCaster->GetBotSpells();
+	if (caster) {
+		std::list<BotSpell> bot_spell_list = GetBotSpellsForSpellEffect(caster, spell_type, SpellEffect::CurrentHP);
 
-		for(std::list<BotSpell>::iterator botSpellListItr = botHoTSpellList.begin(); botSpellListItr != botHoTSpellList.end(); ++botSpellListItr) {
-			// Assuming all the spells have been loaded into this list by level and in descending order
-			if(IsHealOverTimeSpell(botSpellListItr->SpellId)) {
+		for (auto bot_spell_list_itr : bot_spell_list) {
+			if (IsFastHealSpell(bot_spell_list_itr.SpellId) && caster->CastChecks(bot_spell_list_itr.SpellId, tar, spell_type)) {
+				result.SpellId = bot_spell_list_itr.SpellId;
+				result.SpellIndex = bot_spell_list_itr.SpellIndex;
+				result.ManaCost = bot_spell_list_itr.ManaCost;
 
-				for (int i = botSpellList.size() - 1; i >= 0; i--) {
-					if (botSpellList[i].spellid <= 0 || botSpellList[i].spellid >= SPDAT_RECORDS) {
-						// this is both to quit early to save cpu and to avoid casting bad spells
-						// Bad info from database can trigger this incorrectly, but that should be fixed in DB, not here
+				break;
+			}
+		}
+	}
+
+	return result;
+}
+
+BotSpell Bot::GetBestBotSpellForHealOverTime(Bot* caster, Mob* tar, uint16 spell_type) {
+	BotSpell result;
+
+	result.SpellId = 0;
+	result.SpellIndex = 0;
+	result.ManaCost = 0;
+
+	if (caster) {
+		std::list<BotSpell> bot_spell_list = GetBotSpellsForSpellEffect(caster, spell_type, SpellEffect::HealOverTime);
+
+		for (auto bot_spell_list_itr : bot_spell_list) {
+			if (IsHealOverTimeSpell(bot_spell_list_itr.SpellId) && caster->CastChecks(bot_spell_list_itr.SpellId, tar, spell_type)) {
+				result.SpellId = bot_spell_list_itr.SpellId;
+				result.SpellIndex = bot_spell_list_itr.SpellIndex;
+				result.ManaCost = bot_spell_list_itr.ManaCost;
+
+				break;
+			}
+		}
+	}
+
+	return result;
+}
+
+BotSpell Bot::GetBestBotSpellForPercentageHeal(Bot* caster, Mob* tar, uint16 spell_type) {
+	BotSpell result;
+
+	result.SpellId = 0;
+	result.SpellIndex = 0;
+	result.ManaCost = 0;
+
+	if (caster && caster->AI_HasSpells()) {
+		const std::vector<BotSpells_wIndex>& bot_spell_list = caster->BotGetSpellsByType(spell_type);
+		for (int i = bot_spell_list.size() - 1; i >= 0; i--) {
+			if (!IsValidSpell(bot_spell_list[i].spellid)) {
+				continue;
+			}
+
+			if (
+				(bot_spell_list[i].type == spell_type || bot_spell_list[i].type == GetParentSpellType(spell_type)) &&
+				caster->IsValidSpellTypeBySpellID(spell_type, bot_spell_list[i].spellid) &&
+				IsCompleteHealSpell(bot_spell_list[i].spellid) &&
+				caster->CastChecks(bot_spell_list[i].spellid, tar, spell_type)
+			) {
+				result.SpellId = bot_spell_list[i].spellid;
+				result.SpellIndex = bot_spell_list[i].index;
+				result.ManaCost = bot_spell_list[i].manacost;
+
+				break;
+			}
+		}
+	}
+
+	return result;
+}
+
+BotSpell Bot::GetBestBotSpellForRegularSingleTargetHeal(Bot* caster, Mob* tar, uint16 spell_type) {
+	BotSpell result;
+
+	result.SpellId = 0;
+	result.SpellIndex = 0;
+	result.ManaCost = 0;
+
+	if (caster) {
+		std::list<BotSpell> bot_spell_list = GetBotSpellsForSpellEffect(caster, spell_type, SpellEffect::CurrentHP);
+
+		for (std::list<BotSpell>::iterator bot_spell_list_itr = bot_spell_list.begin(); bot_spell_list_itr != bot_spell_list.end(); ++bot_spell_list_itr) {
+			if (IsRegularSingleTargetHealSpell(bot_spell_list_itr->SpellId) && caster->CastChecks(bot_spell_list_itr->SpellId, tar, spell_type)) {
+				result.SpellId = bot_spell_list_itr->SpellId;
+				result.SpellIndex = bot_spell_list_itr->SpellIndex;
+				result.ManaCost = bot_spell_list_itr->ManaCost;
+
+				break;
+			}
+		}
+	}
+
+	return result;
+}
+
+BotSpell Bot::GetFirstBotSpellForSingleTargetHeal(Bot* caster, Mob* tar, uint16 spell_type) {
+	BotSpell result;
+
+	result.SpellId = 0;
+	result.SpellIndex = 0;
+	result.ManaCost = 0;
+
+	if (caster) {
+		std::list<BotSpell> bot_spell_list = GetBotSpellsForSpellEffect(caster, spell_type, SpellEffect::CurrentHP);
+
+		for (std::list<BotSpell>::iterator bot_spell_list_itr = bot_spell_list.begin(); bot_spell_list_itr != bot_spell_list.end(); ++bot_spell_list_itr) {
+			if (IsRegularSingleTargetHealSpell(bot_spell_list_itr->SpellId) && caster->CastChecks(bot_spell_list_itr->SpellId, tar, spell_type)) {
+				result.SpellId = bot_spell_list_itr->SpellId;
+				result.SpellIndex = bot_spell_list_itr->SpellIndex;
+				result.ManaCost = bot_spell_list_itr->ManaCost;
+
+				break;
+			}
+		}
+	}
+
+	return result;
+}
+
+BotSpell Bot::GetBestBotSpellForGroupHeal(Bot* caster, Mob* tar, uint16 spell_type) {
+	BotSpell result;
+
+	result.SpellId = 0;
+	result.SpellIndex = 0;
+	result.ManaCost = 0;
+
+	if (!caster->TargetValidation(tar)) {
+		return result;
+	}
+
+	std::list<BotSpell> bot_spell_list = GetBotSpellsForSpellEffect(caster, spell_type, SpellEffect::CurrentHP);
+	int target_count = 0;
+	int required_count = caster->GetSpellTypeAEOrGroupTargetCount(spell_type);
+
+	for (std::list<BotSpell>::iterator bot_spell_list_itr = bot_spell_list.begin(); bot_spell_list_itr != bot_spell_list.end(); ++bot_spell_list_itr) {
+		if (IsRegularGroupHealSpell(bot_spell_list_itr->SpellId)) {
+			uint16 spell_id = bot_spell_list_itr->SpellId;
+
+			if (caster->TargetValidation(tar) && !caster->IsCommandedSpell() && caster->IsValidSpellRange(spell_id, tar)) {
+				target_count = caster->GetNumberNeedingHealedInGroup(tar, spell_type, spell_id, caster->GetAOERange(spell_id));
+
+				if (target_count < required_count) {
+					continue;
+				}
+			}
+
+			result.SpellId = bot_spell_list_itr->SpellId;
+			result.SpellIndex = bot_spell_list_itr->SpellIndex;
+			result.ManaCost = bot_spell_list_itr->ManaCost;
+
+			break;
+		}
+	}
+
+	return result;
+}
+
+BotSpell Bot::GetBestBotSpellForGroupHealOverTime(Bot* caster, Mob* tar, uint16 spell_type) {
+	BotSpell result;
+
+	result.SpellId = 0;
+	result.SpellIndex = 0;
+	result.ManaCost = 0;
+
+	if (!caster->TargetValidation(tar)) {
+		return result;
+	}
+
+	std::list<BotSpell> bot_spell_list = GetBotSpellsForSpellEffect(caster, spell_type, SpellEffect::HealOverTime);
+	int target_count = 0;
+	int required_count = caster->GetSpellTypeAEOrGroupTargetCount(spell_type);
+
+	for (std::list<BotSpell>::iterator bot_spell_list_itr = bot_spell_list.begin(); bot_spell_list_itr != bot_spell_list.end(); ++bot_spell_list_itr) {
+		if (IsGroupHealOverTimeSpell(bot_spell_list_itr->SpellId)) {
+			uint16 spell_id = bot_spell_list_itr->SpellId;
+
+			if (caster->TargetValidation(tar) && !caster->IsCommandedSpell() && caster->IsValidSpellRange(spell_id, tar)) {
+				target_count = caster->GetNumberNeedingHealedInGroup(tar, spell_type, spell_id, caster->GetAOERange(spell_id));
+
+				if (target_count < required_count) {
+					continue;
+				}
+			}
+
+			result.SpellId = bot_spell_list_itr->SpellId;
+			result.SpellIndex = bot_spell_list_itr->SpellIndex;
+			result.ManaCost = bot_spell_list_itr->ManaCost;
+
+			break;
+		}
+	}
+
+	return result;
+}
+
+BotSpell Bot::GetBestBotSpellForGroupCompleteHeal(Bot* caster, Mob* tar, uint16 spell_type) {
+	BotSpell result;
+
+	result.SpellId = 0;
+	result.SpellIndex = 0;
+	result.ManaCost = 0;
+
+	if (!caster->TargetValidation(tar)) {
+		return result;
+	}
+
+	std::list<BotSpell> bot_spell_list = GetBotSpellsForSpellEffect(caster, spell_type, SpellEffect::CompleteHeal);
+	int target_count = 0;
+	int required_count = caster->GetSpellTypeAEOrGroupTargetCount(spell_type);
+
+	for (std::list<BotSpell>::iterator bot_spell_list_itr = bot_spell_list.begin(); bot_spell_list_itr != bot_spell_list.end(); ++bot_spell_list_itr) {
+		if (IsGroupCompleteHealSpell(bot_spell_list_itr->SpellId)) {
+			uint16 spell_id = bot_spell_list_itr->SpellId;
+
+			if (caster->TargetValidation(tar) && !caster->IsCommandedSpell() && caster->IsValidSpellRange(spell_id, tar)) {
+				target_count = caster->GetNumberNeedingHealedInGroup(tar, spell_type, spell_id, caster->GetAOERange(spell_id));
+
+				if (target_count < required_count) {
+					continue;
+				}
+			}
+
+			result.SpellId = bot_spell_list_itr->SpellId;
+			result.SpellIndex = bot_spell_list_itr->SpellIndex;
+			result.ManaCost = bot_spell_list_itr->ManaCost;
+
+			break;
+		}
+	}
+
+	return result;
+}
+
+BotSpell Bot::GetBestBotSpellForMez(Bot* caster, uint16 spell_type) {
+	BotSpell result;
+
+	result.SpellId = 0;
+	result.SpellIndex = 0;
+	result.ManaCost = 0;
+
+	if (caster) {
+		std::list<BotSpell> bot_spell_list = GetBotSpellsForSpellEffect(caster, spell_type, SpellEffect::Mez);
+
+		for (std::list<BotSpell>::iterator bot_spell_list_itr = bot_spell_list.begin(); bot_spell_list_itr != bot_spell_list.end(); ++bot_spell_list_itr) {
+			if (
+				IsMesmerizeSpell(bot_spell_list_itr->SpellId) &&
+				caster->CheckSpellRecastTimer(bot_spell_list_itr->SpellId)
+			) {
+				result.SpellId = bot_spell_list_itr->SpellId;
+				result.SpellIndex = bot_spell_list_itr->SpellIndex;
+				result.ManaCost = bot_spell_list_itr->ManaCost;
+
+				break;
+			}
+		}
+	}
+
+	return result;
+}
+
+Mob* Bot::GetFirstIncomingMobToMez(Bot* caster, uint16 spell_id, uint16 spell_type, bool AE) {
+	Mob* result = nullptr;
+
+	if (caster && caster->GetOwner()) {
+		int spell_range = caster->GetActSpellRange(spell_id, spells[spell_id].range);
+		int spell_ae_range = caster->GetAOERange(spell_id);
+		bool is_pbae_spell = IsPBAESpell(spell_id);
+		NPC* npc = nullptr;
+
+		for (auto& close_mob : caster->m_close_mobs) {
+			npc = close_mob.second->CastToNPC();
+
+			if (!npc) {
+				continue;
+			}
+
+			if (!caster->IsValidMezTarget(caster->GetOwner(), npc, spell_id)) {
+				continue;
+			}
+
+			if (is_pbae_spell) {
+				if (spell_ae_range < Distance(caster->GetPosition(), npc->GetPosition())) {
+					continue;
+				}
+			}
+			else {
+				if (spell_range < Distance(caster->GetPosition(), npc->GetPosition())) {
+					continue;
+				}
+			}
+
+			if (AE) {
+				int target_count = 0;
+
+				for (auto& close_mob : caster->m_close_mobs) {
+					Mob* m = close_mob.second;
+
+					if (!caster->IsValidMezTarget(caster->GetOwner(), m, spell_id)) {
 						continue;
 					}
 
-					if(botSpellList[i].spellid == botSpellListItr->SpellId && (botSpellList[i].type & SpellType_Heal) && CheckSpellRecastTimers(botCaster, botSpellListItr->SpellIndex)) {
-						result.SpellId = botSpellListItr->SpellId;
-						result.SpellIndex = botSpellListItr->SpellIndex;
-						result.ManaCost = botSpellListItr->ManaCost;
-					}
-				}
-
-				break;
-			}
-		}
-	}
-
-	return result;
-}
-
-BotSpell Bot::GetBestBotSpellForPercentageHeal(Bot *botCaster) {
-	BotSpell result;
-
-	result.SpellId = 0;
-	result.SpellIndex = 0;
-	result.ManaCost = 0;
-
-	if(botCaster && botCaster->AI_HasSpells()) {
-		std::vector<AISpells_Struct> botSpellList = botCaster->GetBotSpells();
-
-		for (int i = botSpellList.size() - 1; i >= 0; i--) {
-			if (botSpellList[i].spellid <= 0 || botSpellList[i].spellid >= SPDAT_RECORDS) {
-				// this is both to quit early to save cpu and to avoid casting bad spells
-				// Bad info from database can trigger this incorrectly, but that should be fixed in DB, not here
-				continue;
-			}
-
-			if(IsCompleteHealSpell(botSpellList[i].spellid) && CheckSpellRecastTimers(botCaster, i)) {
-				result.SpellId = botSpellList[i].spellid;
-				result.SpellIndex = i;
-				result.ManaCost = botSpellList[i].manacost;
-
-				break;
-			}
-		}
-	}
-
-	return result;
-}
-
-BotSpell Bot::GetBestBotSpellForRegularSingleTargetHeal(Bot* botCaster) {
-	BotSpell result;
-
-	result.SpellId = 0;
-	result.SpellIndex = 0;
-	result.ManaCost = 0;
-
-	if(botCaster) {
-		std::list<BotSpell> botSpellList = GetBotSpellsForSpellEffect(botCaster, SE_CurrentHP);
-
-		for(std::list<BotSpell>::iterator botSpellListItr = botSpellList.begin(); botSpellListItr != botSpellList.end(); ++botSpellListItr) {
-			// Assuming all the spells have been loaded into this list by level and in descending order
-			if(IsRegularSingleTargetHealSpell(botSpellListItr->SpellId) && CheckSpellRecastTimers(botCaster, botSpellListItr->SpellIndex)) {
-				result.SpellId = botSpellListItr->SpellId;
-				result.SpellIndex = botSpellListItr->SpellIndex;
-				result.ManaCost = botSpellListItr->ManaCost;
-
-				break;
-			}
-		}
-	}
-
-	return result;
-}
-
-BotSpell Bot::GetFirstBotSpellForSingleTargetHeal(Bot* botCaster) {
-	BotSpell result;
-
-	result.SpellId = 0;
-	result.SpellIndex = 0;
-	result.ManaCost = 0;
-
-	if(botCaster) {
-		std::list<BotSpell> botSpellList = GetBotSpellsForSpellEffect(botCaster, SE_CurrentHP);
-
-		for(std::list<BotSpell>::iterator botSpellListItr = botSpellList.begin(); botSpellListItr != botSpellList.end(); ++botSpellListItr) {
-			// Assuming all the spells have been loaded into this list by level and in descending order
-			if((IsRegularSingleTargetHealSpell(botSpellListItr->SpellId) || IsFastHealSpell(botSpellListItr->SpellId)) && CheckSpellRecastTimers(botCaster, botSpellListItr->SpellIndex)) {
-				result.SpellId = botSpellListItr->SpellId;
-				result.SpellIndex = botSpellListItr->SpellIndex;
-				result.ManaCost = botSpellListItr->ManaCost;
-
-				break;
-			}
-		}
-	}
-
-	return result;
-}
-
-BotSpell Bot::GetBestBotSpellForGroupHeal(Bot* botCaster) {
-	BotSpell result;
-
-	result.SpellId = 0;
-	result.SpellIndex = 0;
-	result.ManaCost = 0;
-
-	if(botCaster) {
-		std::list<BotSpell> botSpellList = GetBotSpellsForSpellEffect(botCaster, SE_CurrentHP);
-
-		for(std::list<BotSpell>::iterator botSpellListItr = botSpellList.begin(); botSpellListItr != botSpellList.end(); ++botSpellListItr) {
-			// Assuming all the spells have been loaded into this list by level and in descending order
-			if(IsRegularGroupHealSpell(botSpellListItr->SpellId) && CheckSpellRecastTimers(botCaster, botSpellListItr->SpellIndex)) {
-				result.SpellId = botSpellListItr->SpellId;
-				result.SpellIndex = botSpellListItr->SpellIndex;
-				result.ManaCost = botSpellListItr->ManaCost;
-
-				break;
-			}
-		}
-	}
-
-	return result;
-}
-
-BotSpell Bot::GetBestBotSpellForGroupHealOverTime(Bot* botCaster) {
-	BotSpell result;
-
-	result.SpellId = 0;
-	result.SpellIndex = 0;
-	result.ManaCost = 0;
-
-	if(botCaster) {
-		std::list<BotSpell> botHoTSpellList = GetBotSpellsForSpellEffect(botCaster, SE_HealOverTime);
-		std::vector<AISpells_Struct> botSpellList = botCaster->GetBotSpells();
-
-		for(std::list<BotSpell>::iterator botSpellListItr = botHoTSpellList.begin(); botSpellListItr != botHoTSpellList.end(); ++botSpellListItr) {
-			// Assuming all the spells have been loaded into this list by level and in descending order
-			if(IsGroupHealOverTimeSpell(botSpellListItr->SpellId)) {
-
-				for (int i = botSpellList.size() - 1; i >= 0; i--) {
-					if (botSpellList[i].spellid <= 0 || botSpellList[i].spellid >= SPDAT_RECORDS) {
-						// this is both to quit early to save cpu and to avoid casting bad spells
-						// Bad info from database can trigger this incorrectly, but that should be fixed in DB, not here
+					if (spell_ae_range < Distance(npc->GetPosition(), m->GetPosition())) {
 						continue;
 					}
 
-					if(botSpellList[i].spellid == botSpellListItr->SpellId && (botSpellList[i].type & SpellType_Heal) && CheckSpellRecastTimers(botCaster, botSpellListItr->SpellIndex)) {
-						result.SpellId = botSpellListItr->SpellId;
-						result.SpellIndex = botSpellListItr->SpellIndex;
-						result.ManaCost = botSpellListItr->ManaCost;
+					if (caster->CastChecks(spell_id, m, spell_type, true, true)) {
+						++target_count;
+					}
+
+					if (target_count >= caster->GetSpellTypeAEOrGroupTargetCount(spell_type)) {
+						break;
 					}
 				}
 
-				break;
-			}
-		}
-	}
-
-	return result;
-}
-
-BotSpell Bot::GetBestBotSpellForGroupCompleteHeal(Bot* botCaster) {
-	BotSpell result;
-
-	result.SpellId = 0;
-	result.SpellIndex = 0;
-	result.ManaCost = 0;
-
-	if(botCaster) {
-		std::list<BotSpell> botSpellList = GetBotSpellsForSpellEffect(botCaster, SE_CompleteHeal);
-
-		for(std::list<BotSpell>::iterator botSpellListItr = botSpellList.begin(); botSpellListItr != botSpellList.end(); ++botSpellListItr) {
-			// Assuming all the spells have been loaded into this list by level and in descending order
-			if(IsGroupCompleteHealSpell(botSpellListItr->SpellId) && CheckSpellRecastTimers(botCaster, botSpellListItr->SpellIndex)) {
-				result.SpellId = botSpellListItr->SpellId;
-				result.SpellIndex = botSpellListItr->SpellIndex;
-				result.ManaCost = botSpellListItr->ManaCost;
-
-				break;
-			}
-		}
-	}
-
-	return result;
-}
-
-BotSpell Bot::GetBestBotSpellForMez(Bot* botCaster) {
-	BotSpell result;
-
-	result.SpellId = 0;
-	result.SpellIndex = 0;
-	result.ManaCost = 0;
-
-	if(botCaster) {
-		std::list<BotSpell> botSpellList = GetBotSpellsForSpellEffect(botCaster, SE_Mez);
-
-		for(std::list<BotSpell>::iterator botSpellListItr = botSpellList.begin(); botSpellListItr != botSpellList.end(); ++botSpellListItr) {
-			// Assuming all the spells have been loaded into this list by level and in descending order
-			if(IsMezSpell(botSpellListItr->SpellId) && CheckSpellRecastTimers(botCaster, botSpellListItr->SpellIndex)) {
-				result.SpellId = botSpellListItr->SpellId;
-				result.SpellIndex = botSpellListItr->SpellIndex;
-				result.ManaCost = botSpellListItr->ManaCost;
-
-				break;
-			}
-		}
-	}
-
-	return result;
-}
-
-BotSpell Bot::GetBestBotSpellForMagicBasedSlow(Bot* botCaster) {
-	BotSpell result;
-
-	result.SpellId = 0;
-	result.SpellIndex = 0;
-	result.ManaCost = 0;
-
-	if(botCaster) {
-		std::list<BotSpell> botSpellList = GetBotSpellsForSpellEffect(botCaster, SE_AttackSpeed);
-
-		for (std::list<BotSpell>::iterator botSpellListItr = botSpellList.begin(); botSpellListItr != botSpellList.end(); ++botSpellListItr) {
-			// Assuming all the spells have been loaded into this list by level and in descending order
-			if (IsSlowSpell(botSpellListItr->SpellId) && spells[botSpellListItr->SpellId].resisttype == RESIST_MAGIC && CheckSpellRecastTimers(botCaster, botSpellListItr->SpellIndex)) {
-				result.SpellId = botSpellListItr->SpellId;
-				result.SpellIndex = botSpellListItr->SpellIndex;
-				result.ManaCost = botSpellListItr->ManaCost;
-
-				break;
-			}
-		}
-	}
-
-	return result;
-}
-
-BotSpell Bot::GetBestBotSpellForDiseaseBasedSlow(Bot* botCaster) {
-	BotSpell result;
-
-	result.SpellId = 0;
-	result.SpellIndex = 0;
-	result.ManaCost = 0;
-
-	if(botCaster) {
-		std::list<BotSpell> botSpellList = GetBotSpellsForSpellEffect(botCaster, SE_AttackSpeed);
-
-		for(std::list<BotSpell>::iterator botSpellListItr = botSpellList.begin(); botSpellListItr != botSpellList.end(); ++botSpellListItr) {
-			// Assuming all the spells have been loaded into this list by level and in descending order
-			if(IsSlowSpell(botSpellListItr->SpellId) && spells[botSpellListItr->SpellId].resisttype == RESIST_DISEASE && CheckSpellRecastTimers(botCaster, botSpellListItr->SpellIndex)) {
-				result.SpellId = botSpellListItr->SpellId;
-				result.SpellIndex = botSpellListItr->SpellIndex;
-				result.ManaCost = botSpellListItr->ManaCost;
-
-				break;
-			}
-		}
-	}
-
-	return result;
-}
-
-Mob* Bot::GetFirstIncomingMobToMez(Bot* botCaster, BotSpell botSpell) {
-	Mob* result = 0;
-
-	if(botCaster && IsMezSpell(botSpell.SpellId)) {
-
-		std::list<NPC*> npc_list;
-		entity_list.GetNPCList(npc_list);
-
-		for(std::list<NPC*>::iterator itr = npc_list.begin(); itr != npc_list.end(); ++itr) {
-			NPC* npc = *itr;
-
-			if(DistanceSquaredNoZ(npc->GetPosition(), botCaster->GetPosition()) <= botCaster->GetActSpellRange(botSpell.SpellId, spells[botSpell.SpellId].range)) {
-				if(!npc->IsMezzed()) {
-					if(botCaster->HasGroup()) {
-						Group* g = botCaster->GetGroup();
-
-						if(g) {
-							for(int counter = 0; counter < g->GroupCount(); counter++) {
-								if(npc->IsOnHatelist(g->members[counter]) && g->members[counter]->GetTarget() != npc && g->members[counter]->IsEngaged()) {
-									result = npc;
-									break;
-								}
-							}
-						}
-					}
+				if (target_count < caster->GetSpellTypeAEOrGroupTargetCount(spell_type)) {
+					continue;
 				}
+
+				result = npc;
+			}
+			else {
+				if (spell_range < Distance(caster->GetPosition(), npc->GetPosition())) {
+					continue;
+				}
+
+				if (!caster->CastChecks(spell_id, npc, spell_type, true)) {
+					continue;
+				}
+
+				result = npc;
 			}
 
-			if(result)
-				break;
+			if (result) {
+				return result;
+			}
 		}
 	}
 
 	return result;
 }
 
-BotSpell Bot::GetBestBotMagicianPetSpell(Bot *botCaster) {
+BotSpell Bot::GetBestBotMagicianPetSpell(Bot* caster, uint16 spell_type) {
 	BotSpell result;
 
 	result.SpellId = 0;
 	result.SpellIndex = 0;
 	result.ManaCost = 0;
 
-	if(botCaster) {
-		std::list<BotSpell> botSpellList = GetBotSpellsForSpellEffect(botCaster, SE_SummonPet);
+	if (caster) {
+		std::list<BotSpell> bot_spell_list = GetBotSpellsForSpellEffect(caster, spell_type, SpellEffect::SummonPet);
+		std::string pet_type = GetBotMagicianPetType(caster);
 
-		std::string petType = GetBotMagicianPetType(botCaster);
-
-		for(std::list<BotSpell>::iterator botSpellListItr = botSpellList.begin(); botSpellListItr != botSpellList.end(); ++botSpellListItr) {
-			// Assuming all the spells have been loaded into this list by level and in descending order
-			if(IsSummonPetSpell(botSpellListItr->SpellId) && CheckSpellRecastTimers(botCaster, botSpellListItr->SpellIndex)) {
-				if(!strncmp(spells[botSpellListItr->SpellId].teleport_zone, petType.c_str(), petType.length())) {
-					result.SpellId = botSpellListItr->SpellId;
-					result.SpellIndex = botSpellListItr->SpellIndex;
-					result.ManaCost = botSpellListItr->ManaCost;
+		for(std::list<BotSpell>::iterator bot_spell_list_itr = bot_spell_list.begin(); bot_spell_list_itr != bot_spell_list.end(); ++bot_spell_list_itr) {
+			if (
+				IsSummonPetSpell(bot_spell_list_itr->SpellId) &&
+				caster->CheckSpellRecastTimer(bot_spell_list_itr->SpellId) &&
+				!strncmp(spells[bot_spell_list_itr->SpellId].teleport_zone, pet_type.c_str(), pet_type.length())
+			) {
+					result.SpellId = bot_spell_list_itr->SpellId;
+					result.SpellIndex = bot_spell_list_itr->SpellIndex;
+					result.ManaCost = bot_spell_list_itr->ManaCost;
 
 					break;
-				}
 			}
 		}
 	}
@@ -2102,79 +1569,191 @@ BotSpell Bot::GetBestBotMagicianPetSpell(Bot *botCaster) {
 	return result;
 }
 
-std::string Bot::GetBotMagicianPetType(Bot* botCaster) {
+std::string Bot::GetBotMagicianPetType(Bot* caster) {
 	std::string result;
 
-	if(botCaster) {
-		if(botCaster->IsPetChooser()) {
-			switch(botCaster->GetPetChooserID()) {
-				case 0:
+	if (caster) {
+		uint8 pet_type = caster->GetPetChooserID();
+		uint8 bot_level = caster->GetLevel();
+		bool epic_allowed = false;
+		std::string epic_spell_name = RuleS(Bots, EpicPetSpellName);
+
+		if (epic_spell_name.empty()) {
+			epic_spell_name = "SumMageMultiElement";
+		}
+
+		if (RuleB(Bots, AllowMagicianEpicPet)) {
+			if (bot_level >= RuleI(Bots, AllowMagicianEpicPetLevel)) {
+				if (!RuleI(Bots, RequiredMagicianEpicPetItemID)) {
+					epic_allowed = true;
+				}
+				else {
+					bool has_item = caster->HasBotItem(RuleI(Bots, RequiredMagicianEpicPetItemID)) != INVALID_INDEX;
+
+					if (has_item) {
+						epic_allowed = true;
+					}
+				}
+			}
+		}
+
+		if (pet_type > 0) {
+			switch (pet_type) {
+				case SumWater:
 					result = std::string("SumWater");
 					break;
-				case 1:
+				case SumFire:
 					result = std::string("SumFire");
 					break;
-				case 2:
+				case SumAir:
 					result = std::string("SumAir");
 					break;
-				case 3:
+				case SumEarth:
 					result = std::string("SumEarth");
 					break;
-				default:
+				case MonsterSum:
 					result = std::string("MonsterSum");
+					break;
+				case SumMageMultiElement:
+					if (epic_allowed) {
+						result = epic_spell_name;
+					}
+					else {
+						caster->SetPetChooserID(0);
+					}
 					break;
 			}
 		}
 		else {
-			if(botCaster->GetLevel() == 2)
-				result = std::string("SumWater");
-			else if(botCaster->GetLevel() == 3)
-				result = std::string("SumFire");
-			else if(botCaster->GetLevel() == 4)
-				result = std::string("SumAir");
-			else if(botCaster->GetLevel() == 5)
-				result = std::string("SumEarth");
-			else if(botCaster->GetLevel() < 30) {
-				// Under level 30
-				int counter = zone->random.Int(0, 3);
+			uint8 air_min_level = 255;
+			uint8 fire_min_level = 255;
+			uint8 water_min_level = 255;
+			uint8 earth_min_level = 255;
+			uint8 monster_min_level = 255;
+			uint8 epic_min_level = 255;
+			std::list<BotSpell> bot_spell_list = caster->GetBotSpellsBySpellType(caster, BotSpellTypes::Pet);
 
-				switch(counter) {
-					case 0:
-					result = std::string("SumWater");
-					break;
-				case 1:
-					result = std::string("SumFire");
-					break;
-				case 2:
-					result = std::string("SumAir");
-					break;
-				case 3:
-					result = std::string("SumEarth");
-					break;
-				default:
-					result = std::string("MonsterSum");
-					break;
+			for (const auto& s : bot_spell_list) {
+				if (!IsValidSpell(s.SpellId)) {
+					continue;
+				}
+
+				if (!IsEffectInSpell(s.SpellId, SpellEffect::SummonPet)) {
+					continue;
+				}
+
+				auto spell = spells[s.SpellId];
+
+				if (!strncmp(spell.teleport_zone, "SumWater", 8) && spell.classes[Class::Magician - 1] < water_min_level) {
+					water_min_level = spell.classes[Class::Magician - 1];
+				}
+				else if (!strncmp(spell.teleport_zone, "SumFire", 7) && spell.classes[Class::Magician - 1] < fire_min_level) {
+					fire_min_level = spell.classes[Class::Magician - 1];
+				}
+				else if (!strncmp(spell.teleport_zone, "SumAir", 6) && spell.classes[Class::Magician - 1] < air_min_level) {
+					air_min_level = spell.classes[Class::Magician - 1];
+				}
+				else if (!strncmp(spell.teleport_zone, "SumEarth", 8) && spell.classes[Class::Magician - 1] < earth_min_level) {
+					earth_min_level = spell.classes[Class::Magician - 1];
+				}
+				else if (!strncmp(spell.teleport_zone, "MonsterSum", 10) && spell.classes[Class::Magician - 1] < monster_min_level) {
+					monster_min_level = spell.classes[Class::Magician - 1];
+				}
+				else if (!strncmp(spell.teleport_zone, epic_spell_name.c_str(), epic_spell_name.length()) && spell.classes[Class::Magician - 1] < epic_min_level) {
+					epic_min_level = spell.classes[Class::Magician - 1];
+				}
+			}
+
+			if (epic_allowed) {
+				epic_min_level = std::max(int(epic_min_level), RuleI(Bots, AllowMagicianEpicPetLevel));
+
+				if (bot_level >= epic_min_level) {
+					result = epic_spell_name;
 				}
 			}
 			else {
-				// Over level 30
-				int counter = zone->random.Int(0, 4);
+				bool found = false;
+				uint8 count = 0;
 
-				switch(counter) {
-					case 0:
-					result = std::string("SumWater");
-					break;
-				case 1:
-					result = std::string("SumFire");
-					break;
-				case 2:
-					result = std::string("SumAir");
-					break;
-				case 3:
-					result = std::string("SumEarth");
-					break;
-				default:
-					result = std::string("MonsterSum");
+				while (count <= 4 && !found) {
+					int counter = zone->random.Int(1, 4);
+
+					switch (counter) {
+						case SumWater:
+							if (bot_level >= water_min_level) {
+								result = std::string("SumWater");
+							}
+
+							found = true;
+							break;
+						case SumFire:
+							if (bot_level >= fire_min_level) {
+								result = std::string("SumFire");
+							}
+
+							found = true;
+							break;
+						case SumAir:
+							if (bot_level >= air_min_level) {
+								result = std::string("SumAir");
+							}
+
+							found = true;
+							break;
+						case SumEarth:
+							if (bot_level >= earth_min_level) {
+								result = std::string("SumEarth");
+							}
+
+							found = true;
+							break;
+					}
+
+					++count;
+				}
+			}
+		}
+	}
+
+	return result;
+}
+
+BotSpell Bot::GetBestBotSpellForNukeByTargetType(Bot* caster, SpellTargetType target_type, uint16 spell_type, bool AE, Mob* tar) {
+	BotSpell result;
+
+	result.SpellId = 0;
+	result.SpellIndex = 0;
+	result.ManaCost = 0;
+
+	if (tar == nullptr) {
+		tar = caster->GetTarget();
+	}
+
+	if (caster) {
+		std::list<BotSpell> bot_spell_list = GetBotSpellsForSpellEffectAndTargetType(caster, spell_type, SpellEffect::CurrentHP, target_type);
+
+		for(std::list<BotSpell>::iterator bot_spell_list_itr = bot_spell_list.begin(); bot_spell_list_itr != bot_spell_list.end(); ++bot_spell_list_itr) {
+			if (IsPureNukeSpell(bot_spell_list_itr->SpellId) || IsDamageSpell(bot_spell_list_itr->SpellId)) {
+				if (!AE && IsAnyAESpell(bot_spell_list_itr->SpellId) && !IsGroupSpell(bot_spell_list_itr->SpellId)) {
+					continue;
+				}
+				else if (AE && !IsAnyAESpell(bot_spell_list_itr->SpellId)) {
+					continue;
+				}
+
+				if (!IsPBAESpell(bot_spell_list_itr->SpellId) && !caster->CastChecks(bot_spell_list_itr->SpellId, tar, spell_type, false, IsAEBotSpellType(spell_type))) {
+					continue;
+				}
+
+				if (
+					caster->IsCommandedSpell() ||
+					!AE ||
+					(AE && caster->HasValidAETarget(caster, bot_spell_list_itr->SpellId, spell_type, tar))
+				) {
+					result.SpellId = bot_spell_list_itr->SpellId;
+					result.SpellIndex = bot_spell_list_itr->SpellIndex;
+					result.ManaCost = bot_spell_list_itr->ManaCost;
+
 					break;
 				}
 			}
@@ -2184,32 +1763,7 @@ std::string Bot::GetBotMagicianPetType(Bot* botCaster) {
 	return result;
 }
 
-BotSpell Bot::GetBestBotSpellForNukeByTargetType(Bot* botCaster, SpellTargetType targetType) {
-	BotSpell result;
-
-	result.SpellId = 0;
-	result.SpellIndex = 0;
-	result.ManaCost = 0;
-
-	if(botCaster) {
-		std::list<BotSpell> botSpellList = GetBotSpellsForSpellEffectAndTargetType(botCaster, SE_CurrentHP, targetType);
-
-		for(std::list<BotSpell>::iterator botSpellListItr = botSpellList.begin(); botSpellListItr != botSpellList.end(); ++botSpellListItr) {
-			// Assuming all the spells have been loaded into this list by level and in descending order
-			if(IsPureNukeSpell(botSpellListItr->SpellId) && IsDamageSpell(botSpellListItr->SpellId) && CheckSpellRecastTimers(botCaster, botSpellListItr->SpellIndex)) {
-				result.SpellId = botSpellListItr->SpellId;
-				result.SpellIndex = botSpellListItr->SpellIndex;
-				result.ManaCost = botSpellListItr->ManaCost;
-
-				break;
-			}
-		}
-	}
-
-	return result;
-}
-
-BotSpell Bot::GetBestBotSpellForStunByTargetType(Bot* botCaster, SpellTargetType targetType)
+BotSpell Bot::GetBestBotSpellForStunByTargetType(Bot* caster, SpellTargetType target_type, uint16 spell_type, bool AE, Mob* tar)
 {
 	BotSpell result;
 
@@ -2217,19 +1771,39 @@ BotSpell Bot::GetBestBotSpellForStunByTargetType(Bot* botCaster, SpellTargetType
 	result.SpellIndex = 0;
 	result.ManaCost = 0;
 
-	if(botCaster)
+	if (tar == nullptr) {
+		tar = caster->GetTarget();
+	}
+
+	if (caster)
 	{
-		std::list<BotSpell> botSpellList = GetBotSpellsForSpellEffectAndTargetType(botCaster, SE_Stun, targetType);
+		std::list<BotSpell> bot_spell_list = GetBotSpellsForSpellEffectAndTargetType(caster, spell_type, SpellEffect::Stun, target_type);
 
-		for(std::list<BotSpell>::iterator botSpellListItr = botSpellList.begin(); botSpellListItr != botSpellList.end(); ++botSpellListItr)
+		for(std::list<BotSpell>::iterator bot_spell_list_itr = bot_spell_list.begin(); bot_spell_list_itr != bot_spell_list.end(); ++bot_spell_list_itr)
 		{
-			// Assuming all the spells have been loaded into this list by level and in descending order
-			if(IsStunSpell(botSpellListItr->SpellId) && CheckSpellRecastTimers(botCaster, botSpellListItr->SpellIndex))
-			{
-				result.SpellId = botSpellListItr->SpellId;
-				result.SpellIndex = botSpellListItr->SpellIndex;
-				result.ManaCost = botSpellListItr->ManaCost;
-				break;
+			if (IsStunSpell(bot_spell_list_itr->SpellId)) {
+				if (!AE && IsAnyAESpell(bot_spell_list_itr->SpellId) && !IsGroupSpell(bot_spell_list_itr->SpellId)) {
+					continue;
+				}
+				else if (AE && !IsAnyAESpell(bot_spell_list_itr->SpellId)) {
+					continue;
+				}
+
+				if (!IsPBAESpell(bot_spell_list_itr->SpellId) && !caster->CastChecks(bot_spell_list_itr->SpellId, tar, spell_type, false, IsAEBotSpellType(spell_type))) {
+					continue;
+				}
+
+				if (
+					caster->IsCommandedSpell() ||
+					!AE ||
+					(AE && caster->HasValidAETarget(caster, bot_spell_list_itr->SpellId, spell_type, tar))
+				) {
+					result.SpellId = bot_spell_list_itr->SpellId;
+					result.SpellIndex = bot_spell_list_itr->SpellIndex;
+					result.ManaCost = bot_spell_list_itr->ManaCost;
+
+					break;
+				}
 			}
 		}
 	}
@@ -2237,105 +1811,147 @@ BotSpell Bot::GetBestBotSpellForStunByTargetType(Bot* botCaster, SpellTargetType
 	return result;
 }
 
-BotSpell Bot::GetBestBotWizardNukeSpellByTargetResists(Bot* botCaster, Mob* target) {
+BotSpell Bot::GetBestBotWizardNukeSpellByTargetResists(Bot* caster, Mob* target, uint16 spell_type) {
 	BotSpell result;
 
 	result.SpellId = 0;
 	result.SpellIndex = 0;
 	result.ManaCost = 0;
 
-	if(botCaster && target) {
-		const int lureResisValue = -100;
-		const int maxTargetResistValue = 300;
-		bool selectLureNuke = false;
+	if (caster && target) {
 
-		if((target->GetMR() > maxTargetResistValue) && (target->GetCR() > maxTargetResistValue) && (target->GetFR() > maxTargetResistValue))
-			selectLureNuke = true;
+		const int lure_resis_value = -100;
 
+		int32 level_mod = (target->GetLevel() - caster->GetLevel()) * (target->GetLevel() - caster->GetLevel()) / 2;
 
-		std::list<BotSpell> botSpellList = GetBotSpellsForSpellEffectAndTargetType(botCaster, SE_CurrentHP, ST_Target);
+		if (target->GetLevel() - caster->GetLevel() < 0) {
+			level_mod = -level_mod;
+		}
+		const int max_target_resist_value = caster->GetSpellTypeResistLimit(spell_type);
+		bool select_lure_nuke = false;
 
-		BotSpell firstWizardMagicNukeSpellFound;
-		firstWizardMagicNukeSpellFound.SpellId = 0;
-		firstWizardMagicNukeSpellFound.SpellIndex = 0;
-		firstWizardMagicNukeSpellFound.ManaCost = 0;
-
-		for(std::list<BotSpell>::iterator botSpellListItr = botSpellList.begin(); botSpellListItr != botSpellList.end(); ++botSpellListItr) {
-			// Assuming all the spells have been loaded into this list by level and in descending order
-			bool spellSelected = false;
-
-			if(CheckSpellRecastTimers(botCaster, botSpellListItr->SpellIndex)) {
-				if(selectLureNuke && (spells[botSpellListItr->SpellId].ResistDiff < lureResisValue)) {
-					spellSelected = true;
-				}
-				else if(IsPureNukeSpell(botSpellListItr->SpellId)) {
-					if(((target->GetMR() < target->GetCR()) || (target->GetMR() < target->GetFR())) && (GetSpellResistType(botSpellListItr->SpellId) == RESIST_MAGIC)
-						&& (spells[botSpellListItr->SpellId].ResistDiff > lureResisValue))
-					{
-						spellSelected = true;
-					}
-					else if(((target->GetCR() < target->GetMR()) || (target->GetCR() < target->GetFR())) && (GetSpellResistType(botSpellListItr->SpellId) == RESIST_COLD)
-						&& (spells[botSpellListItr->SpellId].ResistDiff > lureResisValue))
-					{
-						spellSelected = true;
-					}
-					else if(((target->GetFR() < target->GetCR()) || (target->GetFR() < target->GetMR())) && (GetSpellResistType(botSpellListItr->SpellId) == RESIST_FIRE)
-						&& (spells[botSpellListItr->SpellId].ResistDiff > lureResisValue))
-					{
-						spellSelected = true;
-					}
-					else if((GetSpellResistType(botSpellListItr->SpellId) == RESIST_MAGIC) && (spells[botSpellListItr->SpellId].ResistDiff > lureResisValue) && !IsStunSpell(botSpellListItr->SpellId)) {
-						firstWizardMagicNukeSpellFound.SpellId = botSpellListItr->SpellId;
-						firstWizardMagicNukeSpellFound.SpellIndex = botSpellListItr->SpellIndex;
-						firstWizardMagicNukeSpellFound.ManaCost = botSpellListItr->ManaCost;
-					}
-				}
-			}
-
-			if(spellSelected) {
-				result.SpellId = botSpellListItr->SpellId;
-				result.SpellIndex = botSpellListItr->SpellIndex;
-				result.ManaCost = botSpellListItr->ManaCost;
-
-				break;
-			}
+		if (((target->GetMR() + level_mod) > max_target_resist_value) && ((target->GetCR() + level_mod) > max_target_resist_value) && ((target->GetFR() + level_mod) > max_target_resist_value)) {
+			select_lure_nuke = true;
 		}
 
-		if(result.SpellId == 0) {
-			result = firstWizardMagicNukeSpellFound;
-		}
-	}
 
-	return result;
-}
+		std::list<BotSpell> bot_spell_list = GetBotSpellsForSpellEffectAndTargetType(caster, spell_type, SpellEffect::CurrentHP, ST_Target);
 
-BotSpell Bot::GetDebuffBotSpell(Bot* botCaster, Mob *tar) {
-	BotSpell result;
+		BotSpell first_wizard_magic_nuke_spell_found;
+		first_wizard_magic_nuke_spell_found.SpellId = 0;
+		first_wizard_magic_nuke_spell_found.SpellIndex = 0;
+		first_wizard_magic_nuke_spell_found.ManaCost = 0;
+		bool spell_selected = false;
 
-	result.SpellId = 0;
-	result.SpellIndex = 0;
-	result.ManaCost = 0;
-
-	if(!tar || !botCaster)
-		return result;
-
-	if(botCaster && botCaster->AI_HasSpells()) {
-		std::vector<AISpells_Struct> botSpellList = botCaster->GetBotSpells();
-
-		for (int i = botSpellList.size() - 1; i >= 0; i--) {
-			if (botSpellList[i].spellid <= 0 || botSpellList[i].spellid >= SPDAT_RECORDS) {
-				// this is both to quit early to save cpu and to avoid casting bad spells
-				// Bad info from database can trigger this incorrectly, but that should be fixed in DB, not here
+		for (std::list<BotSpell>::iterator bot_spell_list_itr = bot_spell_list.begin(); bot_spell_list_itr != bot_spell_list.end(); ++bot_spell_list_itr) {
+			if (!caster->IsValidSpellRange(bot_spell_list_itr->SpellId, target)) {
 				continue;
 			}
 
-			if(((botSpellList[i].type & SpellType_Debuff) || IsDebuffSpell(botSpellList[i].spellid))
-				&& (!tar->IsImmuneToSpell(botSpellList[i].spellid, botCaster)
-				&& tar->CanBuffStack(botSpellList[i].spellid, botCaster->GetLevel(), true) >= 0)
-				&& CheckSpellRecastTimers(botCaster, i)) {
-				result.SpellId = botSpellList[i].spellid;
-				result.SpellIndex = i;
-				result.ManaCost = botSpellList[i].manacost;
+			if (select_lure_nuke && (spells[bot_spell_list_itr->SpellId].resist_difficulty < lure_resis_value)) {
+				if (caster->CastChecks(bot_spell_list_itr->SpellId, target, spell_type)) {
+					spell_selected = true;
+				}
+			}
+			else if (!select_lure_nuke && IsPureNukeSpell(bot_spell_list_itr->SpellId)) {
+				if (
+					((target->GetMR() < target->GetCR()) || (target->GetMR() < target->GetFR())) &&
+					(GetSpellResistType(bot_spell_list_itr->SpellId) == RESIST_MAGIC) &&
+					(spells[bot_spell_list_itr->SpellId].resist_difficulty > lure_resis_value) &&
+					caster->CastChecks(bot_spell_list_itr->SpellId, target, spell_type)
+				) {
+					spell_selected = true;
+				}
+				else if (
+					((target->GetCR() < target->GetMR()) || (target->GetCR() < target->GetFR())) &&
+					(GetSpellResistType(bot_spell_list_itr->SpellId) == RESIST_COLD) &&
+					(spells[bot_spell_list_itr->SpellId].resist_difficulty > lure_resis_value) &&
+					caster->CastChecks(bot_spell_list_itr->SpellId, target, spell_type)
+				) {
+					spell_selected = true;
+				}
+				else if (
+					((target->GetFR() < target->GetCR()) || (target->GetFR() < target->GetMR())) &&
+					(GetSpellResistType(bot_spell_list_itr->SpellId) == RESIST_FIRE) &&
+					(spells[bot_spell_list_itr->SpellId].resist_difficulty > lure_resis_value) &&
+					caster->CastChecks(bot_spell_list_itr->SpellId, target, spell_type)
+				) {
+					spell_selected = true;
+				}
+				else if (
+					(GetSpellResistType(bot_spell_list_itr->SpellId) == RESIST_MAGIC) &&
+					(spells[bot_spell_list_itr->SpellId].resist_difficulty > lure_resis_value) &&
+					caster->CastChecks(bot_spell_list_itr->SpellId, target, spell_type)
+				) {
+					first_wizard_magic_nuke_spell_found.SpellId = bot_spell_list_itr->SpellId;
+					first_wizard_magic_nuke_spell_found.SpellIndex = bot_spell_list_itr->SpellIndex;
+					first_wizard_magic_nuke_spell_found.ManaCost = bot_spell_list_itr->ManaCost;
+				}
+			}
+
+			if (spell_selected) {
+				result.SpellId = bot_spell_list_itr->SpellId;
+				result.SpellIndex = bot_spell_list_itr->SpellIndex;
+				result.ManaCost = bot_spell_list_itr->ManaCost;
+
+				break;
+			}
+		}
+
+		if (!spell_selected) {
+			for (std::list<BotSpell>::iterator bot_spell_list_itr = bot_spell_list.begin(); bot_spell_list_itr != bot_spell_list.end(); ++bot_spell_list_itr) {
+				if (caster->CheckSpellRecastTimer(bot_spell_list_itr->SpellId)) {
+					if (caster->CastChecks(bot_spell_list_itr->SpellId, target, spell_type)) {
+						spell_selected = true;
+					}
+				}
+				if (spell_selected) {
+					result.SpellId = bot_spell_list_itr->SpellId;
+					result.SpellIndex = bot_spell_list_itr->SpellIndex;
+					result.ManaCost = bot_spell_list_itr->ManaCost;
+
+					break;
+				}
+			}
+		}
+
+		if (result.SpellId == 0) {
+			result = first_wizard_magic_nuke_spell_found;
+		}
+	}
+
+	return result;
+}
+
+BotSpell Bot::GetDebuffBotSpell(Bot* caster, Mob *tar, uint16 spell_type) {
+	BotSpell result;
+
+	result.SpellId = 0;
+	result.SpellIndex = 0;
+	result.ManaCost = 0;
+
+	if (!tar || !caster)
+		return result;
+
+	if (caster->AI_HasSpells()) {
+		const std::vector<BotSpells_wIndex>& bot_spell_list = caster->BotGetSpellsByType(spell_type);
+
+		for (int i = bot_spell_list.size() - 1; i >= 0; i--) {
+			if (!IsValidSpell(bot_spell_list[i].spellid)) {
+				continue;
+			}
+
+			if (BotRequiresLoSToCast(spell_type, bot_spell_list[i].spellid) && !caster->HasLoS()) {
+				continue;
+			}
+
+			if (((bot_spell_list[i].type == BotSpellTypes::Debuff) || IsDebuffSpell(bot_spell_list[i].spellid))
+				&& (!tar->IsImmuneToSpell(bot_spell_list[i].spellid, caster)
+				&& tar->CanBuffStack(bot_spell_list[i].spellid, caster->GetLevel(), true) >= 0)
+				&& caster->CheckSpellRecastTimer(bot_spell_list[i].spellid)) {
+				result.SpellId = bot_spell_list[i].spellid;
+				result.SpellIndex = bot_spell_list[i].index;
+				result.ManaCost = bot_spell_list[i].manacost;
 
 				break;
 			}
@@ -2345,49 +1961,56 @@ BotSpell Bot::GetDebuffBotSpell(Bot* botCaster, Mob *tar) {
 	return result;
 }
 
-BotSpell Bot::GetBestBotSpellForResistDebuff(Bot* botCaster, Mob *tar) {
+BotSpell Bot::GetBestBotSpellForResistDebuff(Bot* caster, Mob *tar, uint16 spell_type) {
 	BotSpell result;
 
 	result.SpellId = 0;
 	result.SpellIndex = 0;
 	result.ManaCost = 0;
 
-	if(!tar)
+	if (!tar || !caster) {
 		return result;
+	}
 
-	int level_mod = (tar->GetLevel() - botCaster->GetLevel())* (tar->GetLevel() - botCaster->GetLevel()) / 2;
-	if(tar->GetLevel() - botCaster->GetLevel() < 0)
-	{
+	int level_mod = (tar->GetLevel() - caster->GetLevel())* (tar->GetLevel() - caster->GetLevel()) / 2;
+	if (tar->GetLevel() - caster->GetLevel() < 0) {
 		level_mod = -level_mod;
 	}
-	bool needsMagicResistDebuff = (tar->GetMR() + level_mod) > 100 ? true: false;
-	bool needsColdResistDebuff = (tar->GetCR() + level_mod) > 100 ? true: false;
-	bool needsFireResistDebuff = (tar->GetFR() + level_mod) > 100 ? true: false;
-	bool needsPoisonResistDebuff = (tar->GetPR() + level_mod) > 100 ? true: false;
-	bool needsDiseaseResistDebuff = (tar->GetDR() + level_mod) > 100 ? true: false;
 
-	if(botCaster && botCaster->AI_HasSpells()) {
-		std::vector<AISpells_Struct> botSpellList = botCaster->GetBotSpells();
+	bool needs_magic_resist_debuff = (tar->GetMR() + level_mod) > 100;
+	bool needs_cold_resist_debuff = (tar->GetCR() + level_mod) > 100;
+	bool needs_fire_resist_debuff = (tar->GetFR() + level_mod) > 100;
+	bool needs_poison_resist_debuff = (tar->GetPR() + level_mod) > 100;
+	bool needs_disease_resist_debuff = (tar->GetDR() + level_mod) > 100;
 
-		for (int i = botSpellList.size() - 1; i >= 0; i--) {
-			if (botSpellList[i].spellid <= 0 || botSpellList[i].spellid >= SPDAT_RECORDS) {
-				// this is both to quit early to save cpu and to avoid casting bad spells
-				// Bad info from database can trigger this incorrectly, but that should be fixed in DB, not here
+	if (caster->AI_HasSpells()) {
+		const std::vector<BotSpells_wIndex>& bot_spell_list = caster->BotGetSpellsByType(spell_type);
+
+		for (int i = bot_spell_list.size() - 1; i >= 0; i--) {
+			if (!IsValidSpell(bot_spell_list[i].spellid)) {
 				continue;
 			}
 
-			if(((botSpellList[i].type & SpellType_Debuff) || IsResistDebuffSpell(botSpellList[i].spellid))
-				&& ((needsMagicResistDebuff && (IsEffectInSpell(botSpellList[i].spellid, SE_ResistMagic)) || IsEffectInSpell(botSpellList[i].spellid, SE_ResistAll))
-				|| (needsColdResistDebuff && (IsEffectInSpell(botSpellList[i].spellid, SE_ResistCold)) || IsEffectInSpell(botSpellList[i].spellid, SE_ResistAll))
-				|| (needsFireResistDebuff && (IsEffectInSpell(botSpellList[i].spellid, SE_ResistFire)) || IsEffectInSpell(botSpellList[i].spellid, SE_ResistAll))
-				|| (needsPoisonResistDebuff && (IsEffectInSpell(botSpellList[i].spellid, SE_ResistPoison)) || IsEffectInSpell(botSpellList[i].spellid, SE_ResistAll))
-				|| (needsDiseaseResistDebuff && (IsEffectInSpell(botSpellList[i].spellid, SE_ResistDisease)) || IsEffectInSpell(botSpellList[i].spellid, SE_ResistAll)))
-				&& (!tar->IsImmuneToSpell(botSpellList[i].spellid, botCaster)
-				&& tar->CanBuffStack(botSpellList[i].spellid, botCaster->GetLevel(), true) >= 0)
-				&& CheckSpellRecastTimers(botCaster, i)) {
-				result.SpellId = botSpellList[i].spellid;
-				result.SpellIndex = i;
-				result.ManaCost = botSpellList[i].manacost;
+			if (BotRequiresLoSToCast(spell_type, bot_spell_list[i].spellid) && !caster->HasLoS()) {
+				continue;
+			}
+
+			if (
+				(bot_spell_list[i].type == BotSpellTypes::Debuff || IsResistDebuffSpell(bot_spell_list[i].spellid)) &&
+				(
+					(needs_magic_resist_debuff && (IsEffectInSpell(bot_spell_list[i].spellid, SpellEffect::ResistMagic) || IsEffectInSpell(bot_spell_list[i].spellid, SpellEffect::ResistAll))) ||
+					(needs_cold_resist_debuff && (IsEffectInSpell(bot_spell_list[i].spellid, SpellEffect::ResistCold) || IsEffectInSpell(bot_spell_list[i].spellid, SpellEffect::ResistAll))) ||
+					(needs_fire_resist_debuff && (IsEffectInSpell(bot_spell_list[i].spellid, SpellEffect::ResistFire) || IsEffectInSpell(bot_spell_list[i].spellid, SpellEffect::ResistAll))) ||
+					(needs_poison_resist_debuff && (IsEffectInSpell(bot_spell_list[i].spellid, SpellEffect::ResistPoison) || IsEffectInSpell(bot_spell_list[i].spellid, SpellEffect::ResistAll))) ||
+					(needs_disease_resist_debuff && (IsEffectInSpell(bot_spell_list[i].spellid, SpellEffect::ResistDisease) || IsEffectInSpell(bot_spell_list[i].spellid, SpellEffect::ResistAll)))
+				) &&
+				!tar->IsImmuneToSpell(bot_spell_list[i].spellid, caster) &&
+				tar->CanBuffStack(bot_spell_list[i].spellid, caster->GetLevel(), true) >= 0 &&
+				caster->CheckSpellRecastTimer(bot_spell_list[i].spellid)
+			) {
+				result.SpellId = bot_spell_list[i].spellid;
+				result.SpellIndex = bot_spell_list[i].index;
+				result.ManaCost = bot_spell_list[i].manacost;
 
 				break;
 			}
@@ -2397,109 +2020,81 @@ BotSpell Bot::GetBestBotSpellForResistDebuff(Bot* botCaster, Mob *tar) {
 	return result;
 }
 
-BotSpell Bot::GetBestBotSpellForCure(Bot* botCaster, Mob *tar) {
+BotSpell Bot::GetBestBotSpellForCure(Bot* caster, Mob* tar, uint16 spell_type) {
 	BotSpell_wPriority result;
-	bool spellSelected = false;
 
 	result.SpellId = 0;
 	result.SpellIndex = 0;
 	result.ManaCost = 0;
 
-	if(!tar)
+	if (!tar) {
 		return result;
+	}
 
-	int countNeedsCured = 0;
-	bool isPoisoned = tar->FindType(SE_PoisonCounter);
-	bool isDiseased = tar->FindType(SE_DiseaseCounter);
-	bool isCursed = tar->FindType(SE_CurseCounter);
-	bool isCorrupted = tar->FindType(SE_CorruptionCounter);
+	if (caster) {
+		std::vector<BotSpell_wPriority> bot_spell_list_itr = GetPrioritizedBotSpellsBySpellType(caster, spell_type, tar);
 
-	if(botCaster && botCaster->AI_HasSpells()) {
-		std::list<BotSpell_wPriority> cureList = GetPrioritizedBotSpellsBySpellType(botCaster, SpellType_Cure);
+		if (IsGroupBotSpellType(spell_type)) {
+			int count_needs_cured = 0;
+			uint16 count_poisoned = 0;
+			uint16 count_diseased = 0;
+			uint16 count_cursed = 0;
+			uint16 count_corrupted = 0;
 
-		if(tar->HasGroup()) {
-			Group *g = tar->GetGroup();
+			for (std::vector<BotSpell_wPriority>::iterator itr = bot_spell_list_itr.begin(); itr != bot_spell_list_itr.end(); ++itr) {
+				if (!IsValidSpell(itr->SpellId) || !IsGroupSpell(itr->SpellId)) {
+					continue;
+				}
 
-			if(g) {
-				for( int i = 0; i<MAX_GROUP_MEMBERS; i++) {
-					if(g->members[i] && !g->members[i]->qglobal) {
-						if(botCaster->GetNeedsCured(g->members[i]))
-							countNeedsCured++;
+				for (Mob* m : (IsGroupBotSpellType(spell_type) ? caster->GetSpellTargetList() : caster->GetSpellTargetList(true))) {
+					if (caster->GetNeedsCured(m)) {
+						if (caster->CastChecks(itr->SpellId, m, spell_type, true, IsGroupBotSpellType(spell_type))) {
+							if (m->FindType(SpellEffect::PoisonCounter)) {
+								++count_poisoned;
+							}
+							if (m->FindType(SpellEffect::DiseaseCounter)) {
+								++count_diseased;
+							}
+							if (m->FindType(SpellEffect::CurseCounter)) {
+								++count_cursed;
+							}
+							if (m->FindType(SpellEffect::CorruptionCounter)) {
+								++count_corrupted;
+							}
+						}
 					}
+				}
+
+				if (
+					(count_poisoned >= caster->GetSpellTypeAEOrGroupTargetCount(spell_type) && IsEffectInSpell(itr->SpellId, SpellEffect::PoisonCounter)) ||
+					(count_diseased >= caster->GetSpellTypeAEOrGroupTargetCount(spell_type) && IsEffectInSpell(itr->SpellId, SpellEffect::DiseaseCounter)) ||
+					(count_cursed >= caster->GetSpellTypeAEOrGroupTargetCount(spell_type) && IsEffectInSpell(itr->SpellId, SpellEffect::CurseCounter)) ||
+					(count_corrupted >= caster->GetSpellTypeAEOrGroupTargetCount(spell_type) && IsEffectInSpell(itr->SpellId, SpellEffect::CorruptionCounter))
+				) {
+					result.SpellId = itr->SpellId;
+					result.SpellIndex = itr->SpellIndex;
+					result.ManaCost = itr->ManaCost;
+
+					break;
 				}
 			}
 		}
-
-		//Check for group cure first
-		if(countNeedsCured > 2) {
-			for (std::list<BotSpell_wPriority>::iterator itr = cureList.begin(); itr != cureList.end(); ++itr) {
-				BotSpell selectedBotSpell = *itr;
-
-				if(IsGroupSpell(itr->SpellId) && CheckSpellRecastTimers(botCaster, itr->SpellIndex)) {
-					if(selectedBotSpell.SpellId == 0)
-						continue;
-
-					if(isPoisoned && IsEffectInSpell(itr->SpellId, SE_PoisonCounter)) {
-						spellSelected = true;
-					}
-					else if(isDiseased && IsEffectInSpell(itr->SpellId, SE_DiseaseCounter)) {
-						spellSelected = true;
-					}
-					else if(isCursed && IsEffectInSpell(itr->SpellId, SE_CurseCounter)) {
-						spellSelected = true;
-					}
-					else if(isCorrupted && IsEffectInSpell(itr->SpellId, SE_CorruptionCounter)) {
-						spellSelected = true;
-					}
-					else if(IsEffectInSpell(itr->SpellId, SE_DispelDetrimental)) {
-						spellSelected = true;
-					}
-
-					if(spellSelected)
-					{
-						result.SpellId = itr->SpellId;
-						result.SpellIndex = itr->SpellIndex;
-						result.ManaCost = itr->ManaCost;
-
-						break;
-					}
+		else {
+			for (std::vector<BotSpell_wPriority>::iterator itr = bot_spell_list_itr.begin(); itr != bot_spell_list_itr.end(); ++itr) {
+				if (!IsValidSpell(itr->SpellId) || IsGroupSpell(itr->SpellId)) {
+					continue;
 				}
-			}
-		}
 
-		//no group cure for target- try to find single target spell
-		if(!spellSelected) {
-			for(std::list<BotSpell_wPriority>::iterator itr = cureList.begin(); itr != cureList.end(); ++itr) {
-				BotSpell selectedBotSpell = *itr;
-
-				if(CheckSpellRecastTimers(botCaster, itr->SpellIndex)) {
-					if(selectedBotSpell.SpellId == 0)
-						continue;
-
-					if(isPoisoned && IsEffectInSpell(itr->SpellId, SE_PoisonCounter)) {
-						spellSelected = true;
-					}
-					else if(isDiseased && IsEffectInSpell(itr->SpellId, SE_DiseaseCounter)) {
-						spellSelected = true;
-					}
-					else if(isCursed && IsEffectInSpell(itr->SpellId, SE_CurseCounter)) {
-						spellSelected = true;
-					}
-					else if(isCorrupted && IsEffectInSpell(itr->SpellId, SE_CorruptionCounter)) {
-						spellSelected = true;
-					}
-					else if(IsEffectInSpell(itr->SpellId, SE_DispelDetrimental)) {
-						spellSelected = true;
-					}
-
-					if(spellSelected)
-					{
-						result.SpellId = itr->SpellId;
-						result.SpellIndex = itr->SpellIndex;
-						result.ManaCost = itr->ManaCost;
-
-						break;
-					}
+				if (
+					tar->FindType(SpellEffect::PoisonCounter) && IsEffectInSpell(itr->SpellId, SpellEffect::PoisonCounter) ||
+					tar->FindType(SpellEffect::DiseaseCounter) && IsEffectInSpell(itr->SpellId, SpellEffect::DiseaseCounter) ||
+					tar->FindType(SpellEffect::CurseCounter) && IsEffectInSpell(itr->SpellId, SpellEffect::CurseCounter) ||
+					tar->FindType(SpellEffect::CorruptionCounter) && IsEffectInSpell(itr->SpellId, SpellEffect::CorruptionCounter)
+				) {
+					result.SpellId = itr->SpellId;
+					result.SpellIndex = itr->SpellIndex;
+					result.ManaCost = itr->ManaCost;
+					break;
 				}
 			}
 		}
@@ -2508,168 +2103,783 @@ BotSpell Bot::GetBestBotSpellForCure(Bot* botCaster, Mob *tar) {
 	return result;
 }
 
-void Bot::SetSpellRecastTimer(int timer_index, int32 recast_delay) {
-	if(timer_index > 0 && timer_index <= MaxSpellTimer) {
-		timers[timer_index - 1] = Timer::GetCurrentTime() + recast_delay;
-	}
-}
-
-int32 Bot::GetSpellRecastTimer(Bot *caster, int timer_index) {
-	int32 result = 0;
-	if(caster) {
-		if(timer_index > 0 && timer_index <= MaxSpellTimer) {
-			result = caster->timers[timer_index - 1];
-		}
-	}
-	return result;
-}
-
-bool Bot::CheckSpellRecastTimers(Bot *caster, int SpellIndex) {
-	if(caster) {
-		if(caster->AIspells[SpellIndex].time_cancast < Timer::GetCurrentTime()) { //checks spell recast
-			if(GetSpellRecastTimer(caster, spells[caster->AIspells[SpellIndex].spellid].EndurTimerIndex) < Timer::GetCurrentTime()) { //checks for spells on the same timer
-				return true; //can cast spell
-			}
-		}
-	}
-	return false;
-}
-
-void Bot::SetDisciplineRecastTimer(int timer_index, int32 recast_delay) {
-	if(timer_index > 0 && timer_index <= MaxDisciplineTimer) {
-		timers[DisciplineReuseStart + timer_index - 1] = Timer::GetCurrentTime() + recast_delay;
-	}
-}
-
-int32 Bot::GetDisciplineRecastTimer(Bot *caster, int timer_index) {
-	int32 result = 0;
-	if(caster) {
-		if(timer_index > 0 && timer_index <= MaxDisciplineTimer) {
-			result = caster->timers[DisciplineReuseStart + timer_index - 1];
-		}
-	}
-	return result;
-}
-
-uint32 Bot::GetDisciplineRemainingTime(Bot *caster, int timer_index) {
-	int32 result = 0;
-	if(caster) {
-		if(timer_index > 0 && timer_index <= MaxDisciplineTimer) {
-			if(GetDisciplineRecastTimer(caster, timer_index) > Timer::GetCurrentTime())
-				result = GetDisciplineRecastTimer(caster, timer_index) - Timer::GetCurrentTime();
-		}
-	}
-	return result;
-}
-
-bool Bot::CheckDisciplineRecastTimers(Bot *caster, int timer_index) {
-	if(caster) {
-		if(GetDisciplineRecastTimer(caster, timer_index) < Timer::GetCurrentTime()) { //checks for spells on the same timer
-			return true; //can cast spell
-		}
-	}
-	return false;
-}
-
-uint8 Bot::GetChanceToCastBySpellType(uint32 spellType)
+uint8 Bot::GetChanceToCastBySpellType(uint16 spell_type)
 {
-	uint8 spell_type_index = MaxSpellTypes;
-	switch (spellType) {
-	case SpellType_Nuke:
-		spell_type_index = SpellType_NukeIndex;
-		break;
-	case SpellType_Heal:
-		spell_type_index = SpellType_HealIndex;
-		break;
-	case SpellType_Root:
-		spell_type_index = SpellType_RootIndex;
-		break;
-	case SpellType_Buff:
-		spell_type_index = SpellType_BuffIndex;
-		break;
-	case SpellType_Escape:
-		spell_type_index = SpellType_EscapeIndex;
-		break;
-	case SpellType_Pet:
-		spell_type_index = SpellType_PetIndex;
-		break;
-	case SpellType_Lifetap:
-		spell_type_index = SpellType_LifetapIndex;
-		break;
-	case SpellType_Snare:
-		spell_type_index = SpellType_SnareIndex;
-		break;
-	case SpellType_DOT:
-		spell_type_index = SpellType_DOTIndex;
-		break;
-	case SpellType_Dispel:
-		spell_type_index = SpellType_DispelIndex;
-		break;
-	case SpellType_InCombatBuff:
-		spell_type_index = SpellType_InCombatBuffIndex;
-		break;
-	case SpellType_Mez:
-		spell_type_index = SpellType_MezIndex;
-		break;
-	case SpellType_Charm:
-		spell_type_index = SpellType_CharmIndex;
-		break;
-	case SpellType_Slow:
-		spell_type_index = SpellType_SlowIndex;
-		break;
-	case SpellType_Debuff:
-		spell_type_index = SpellType_DebuffIndex;
-		break;
-	case SpellType_Cure:
-		spell_type_index = SpellType_CureIndex;
-		break;
-	case SpellType_Resurrect:
-		spell_type_index = SpellType_ResurrectIndex;
-		break;
-	case SpellType_HateRedux:
-		spell_type_index = SpellType_HateReduxIndex;
-		break;
-	case SpellType_InCombatBuffSong:
-		spell_type_index = SpellType_InCombatBuffSongIndex;
-		break;
-	case SpellType_OutOfCombatBuffSong:
-		spell_type_index = SpellType_OutOfCombatBuffSongIndex;
-		break;
-	case SpellType_PreCombatBuff:
-		spell_type_index = SpellType_PreCombatBuffIndex;
-		break;
-	case SpellType_PreCombatBuffSong:
-		spell_type_index = SpellType_PreCombatBuffSongIndex;
-		break;
-	default:
-		spell_type_index = MaxSpellTypes;
-		break;
-	}
-	if (spell_type_index >= MaxSpellTypes)
-		return 0;
-
-	uint8 class_index = GetClass();
-	if (class_index > BERSERKER || class_index < WARRIOR)
-		return 0;
-	--class_index;
-
-	uint8 stance_index = (uint8)GetBotStance();
-	if (stance_index >= MaxStances)
-		return 0;
-
-	uint8 type_index = nHSND;
-	if (HasGroup()) {
-		if (IsGroupHealer()/* || IsRaidHealer()*/)
-			type_index |= pH;
-		if (IsGroupSlower()/* || IsRaidSlower()*/)
-			type_index |= pS;
-		if (IsGroupNuker()/* || IsRaidNuker()*/)
-			type_index |= pN;
-		if (IsGroupDoter()/* || IsRaidDoter()*/)
-			type_index |= pD;
+	switch (spell_type) {
+		case BotSpellTypes::AENukes:
+		case BotSpellTypes::AERains:
+		case BotSpellTypes::AEStun:
+		case BotSpellTypes::AESnare:
+		case BotSpellTypes::AESlow:
+		case BotSpellTypes::AEDebuff:
+		case BotSpellTypes::AEFear:
+		case BotSpellTypes::AEDispel:
+		case BotSpellTypes::AEDoT:
+		case BotSpellTypes::AELifetap:
+		case BotSpellTypes::AERoot:
+		case BotSpellTypes::PBAENuke:
+		case BotSpellTypes::AEHateLine:
+			return RuleI(Bots, PercentChanceToCastAEs);
+		case BotSpellTypes::GroupHeals:
+		case BotSpellTypes::GroupCompleteHeals:
+		case BotSpellTypes::GroupHoTHeals:
+			return RuleI(Bots, PercentChanceToCastGroupHeal);
+		case BotSpellTypes::Nuke:
+			return RuleI(Bots, PercentChanceToCastNuke);
+		case BotSpellTypes::Root:
+			return RuleI(Bots, PercentChanceToCastRoot);
+		case BotSpellTypes::Buff:
+		case BotSpellTypes::PetBuffs:
+		case BotSpellTypes::ResistBuffs:
+		case BotSpellTypes::PetResistBuffs:
+		case BotSpellTypes::DamageShields:
+		case BotSpellTypes::PetDamageShields:
+			return RuleI(Bots, PercentChanceToCastBuff);
+		case BotSpellTypes::Escape:
+			return RuleI(Bots, PercentChanceToCastEscape);
+		case BotSpellTypes::Lifetap:
+			return RuleI(Bots, PercentChanceToCastLifetap);
+		case BotSpellTypes::Snare:
+			return RuleI(Bots, PercentChanceToCastSnare);
+		case BotSpellTypes::DOT:
+			return RuleI(Bots, PercentChanceToCastDOT);
+		case BotSpellTypes::Dispel:
+			return RuleI(Bots, PercentChanceToCastDispel);
+		case BotSpellTypes::InCombatBuff:
+			return RuleI(Bots, PercentChanceToCastInCombatBuff);
+		case BotSpellTypes::HateLine:
+			return RuleI(Bots, PercentChanceToCastHateLine);
+		case BotSpellTypes::Mez:
+			return RuleI(Bots, PercentChanceToCastMez);
+		case BotSpellTypes::Slow:
+			return RuleI(Bots, PercentChanceToCastSlow);
+		case BotSpellTypes::Debuff:
+			return RuleI(Bots, PercentChanceToCastDebuff);
+		case BotSpellTypes::Cure:
+		case BotSpellTypes::PetCures:
+			return RuleI(Bots, PercentChanceToCastCure);
+		case BotSpellTypes::GroupCures:
+			return RuleI(Bots, PercentChanceToCastGroupCure);
+		case BotSpellTypes::HateRedux:
+			return RuleI(Bots, PercentChanceToCastHateRedux);
+		case BotSpellTypes::Fear:
+			return RuleI(Bots, PercentChanceToCastFear);
+		case BotSpellTypes::RegularHeal:
+		case BotSpellTypes::CompleteHeal:
+		case BotSpellTypes::FastHeals:
+		case BotSpellTypes::VeryFastHeals:
+		case BotSpellTypes::HoTHeals:
+		case BotSpellTypes::PetRegularHeals:
+		case BotSpellTypes::PetCompleteHeals:
+		case BotSpellTypes::PetFastHeals:
+		case BotSpellTypes::PetVeryFastHeals:
+		case BotSpellTypes::PetHoTHeals:
+			return RuleI(Bots, PercentChanceToCastHeal);
+		case BotSpellTypes::AEMez:
+			return RuleI(Bots, PercentChanceToCastAEMez);
+		default:
+			return RuleI(Bots, PercentChanceToCastOtherType);
 	}
 
-	return botdb.GetSpellCastingChance(spell_type_index, class_index, stance_index, type_index);
+	return RuleI(Bots, PercentChanceToCastOtherType);
 }
 
-#endif
+bool Bot::AI_AddBotSpells(uint32 bot_spell_id) {
+	// ok, this function should load the list, and the parent list then shove them into the struct and sort
+	npc_spells_id = bot_spell_id;
+	AIBot_spells.clear();
+	AIBot_spells_enforced.clear();
+	AIBot_spells_by_type.clear();
+
+	if (!bot_spell_id) {
+		AIautocastspell_timer->Disable();
+		return false;
+	}
+
+	auto* spell_list = content_db.GetBotSpells(bot_spell_id);
+	if (!spell_list) {
+		AIautocastspell_timer->Disable();
+		return false;
+	}
+
+	auto* parentlist = content_db.GetBotSpells(spell_list->parent_list);
+
+	auto debug_msg = fmt::format(
+		"Loading Bot spells onto {}: dbspellsid={}, level={}",
+		GetName(),
+		bot_spell_id,
+		GetLevel()
+	);
+
+	debug_msg.append(
+		fmt::format(
+			" (found, {})",
+			spell_list->entries.size()
+		)
+	);
+
+	LogAI("[{}]", debug_msg);
+	for (const auto &iter: spell_list->entries) {
+		LogAIDetail("([{}]) [{}]", iter.spellid, spells[iter.spellid].name);
+	}
+
+	LogAI("fin (spell list)");
+
+	uint16 attack_proc_spell = -1;
+	int8 proc_chance = 3;
+	uint16 range_proc_spell = -1;
+	int16 rproc_chance = 0;
+	uint16 defensive_proc_spell = -1;
+	int16 dproc_chance = 0;
+	uint32 _fail_recast = 0;
+	uint32 _engaged_no_sp_recast_min = 0;
+	uint32 _engaged_no_sp_recast_max = 0;
+	uint8 _engaged_beneficial_self_chance = 0;
+	uint8 _engaged_beneficial_other_chance = 0;
+	uint8 _engaged_detrimental_chance = 0;
+	uint32 _pursue_no_sp_recast_min = 0;
+	uint32 _pursue_no_sp_recast_max = 0;
+	uint8 _pursue_detrimental_chance = 0;
+	uint32 _idle_no_sp_recast_min = 0;
+	uint32 _idle_no_sp_recast_max = 0;
+	uint8 _idle_beneficial_chance = 0;
+
+	if (parentlist) {
+		attack_proc_spell = parentlist->attack_proc;
+		proc_chance = parentlist->proc_chance;
+		range_proc_spell = parentlist->range_proc;
+		rproc_chance = parentlist->rproc_chance;
+		defensive_proc_spell = parentlist->defensive_proc;
+		dproc_chance = parentlist->dproc_chance;
+		_fail_recast = parentlist->fail_recast;
+		_engaged_no_sp_recast_min = parentlist->engaged_no_sp_recast_min;
+		_engaged_no_sp_recast_max = parentlist->engaged_no_sp_recast_max;
+		_engaged_beneficial_self_chance = parentlist->engaged_beneficial_self_chance;
+		_engaged_beneficial_other_chance = parentlist->engaged_beneficial_other_chance;
+		_engaged_detrimental_chance = parentlist->engaged_detrimental_chance;
+		_pursue_no_sp_recast_min = parentlist->pursue_no_sp_recast_min;
+		_pursue_no_sp_recast_max = parentlist->pursue_no_sp_recast_max;
+		_pursue_detrimental_chance = parentlist->pursue_detrimental_chance;
+		_idle_no_sp_recast_min = parentlist->idle_no_sp_recast_min;
+		_idle_no_sp_recast_max = parentlist->idle_no_sp_recast_max;
+		_idle_beneficial_chance = parentlist->idle_beneficial_chance;
+		for (auto &e : parentlist->entries) {
+			if (
+				EQ::ValueWithin(GetLevel(), e.minlevel, e.maxlevel) &&
+				e.spellid &&
+				!IsSpellInBotList(spell_list, e.spellid)
+			) {
+				if (!e.bucket_name.empty() && !e.bucket_value.empty()) {
+					if (!CheckDataBucket(e.bucket_name, e.bucket_value, e.bucket_comparison)) {
+						continue;
+					}
+				}
+
+				const auto& bs = GetBotSpellSetting(e.spellid);
+				if (bs) {
+					if (!bs->is_enabled) {
+						continue;
+					}
+
+					AddSpellToBotList(
+						bs->priority,
+						e.spellid,
+						e.type,
+						e.manacost,
+						e.recast_delay,
+						e.resist_adjust,
+						e.minlevel,
+						e.maxlevel,
+						bs->min_hp,
+						bs->max_hp,
+						e.bucket_name,
+						e.bucket_value,
+						e.bucket_comparison
+					);
+					continue;
+				}
+
+				if (!GetBotEnforceSpellSetting()) {
+					AddSpellToBotList(
+						e.priority,
+						e.spellid,
+						e.type,
+						e.manacost,
+						e.recast_delay,
+						e.resist_adjust,
+						e.minlevel,
+						e.maxlevel,
+						e.min_hp,
+						e.max_hp,
+						e.bucket_name,
+						e.bucket_value,
+						e.bucket_comparison
+					);
+				} else {
+					AddSpellToBotEnforceList(
+						e.priority,
+						e.spellid,
+						e.type,
+						e.manacost,
+						e.recast_delay,
+						e.resist_adjust,
+						e.minlevel,
+						e.maxlevel,
+						e.min_hp,
+						e.max_hp,
+						e.bucket_name,
+						e.bucket_value,
+						e.bucket_comparison
+					);
+				}
+			}
+		}
+	}
+
+	attack_proc_spell = spell_list->attack_proc;
+	proc_chance = spell_list->proc_chance;
+
+	range_proc_spell = spell_list->range_proc;
+	rproc_chance = spell_list->rproc_chance;
+
+	defensive_proc_spell = spell_list->defensive_proc;
+	dproc_chance = spell_list->dproc_chance;
+
+	//If any casting variables are defined in the current list, ignore those in the parent list.
+	if (
+		spell_list->fail_recast ||
+		spell_list->engaged_no_sp_recast_min ||
+		spell_list->engaged_no_sp_recast_max ||
+		spell_list->engaged_beneficial_self_chance ||
+		spell_list->engaged_beneficial_other_chance ||
+		spell_list->engaged_detrimental_chance ||
+		spell_list->pursue_no_sp_recast_min ||
+		spell_list->pursue_no_sp_recast_max ||
+		spell_list->pursue_detrimental_chance ||
+		spell_list->idle_no_sp_recast_min ||
+		spell_list->idle_no_sp_recast_max ||
+		spell_list->idle_beneficial_chance
+	) {
+		_fail_recast = spell_list->fail_recast;
+		_engaged_no_sp_recast_min = spell_list->engaged_no_sp_recast_min;
+		_engaged_no_sp_recast_max = spell_list->engaged_no_sp_recast_max;
+		_engaged_beneficial_self_chance = spell_list->engaged_beneficial_self_chance;
+		_engaged_beneficial_other_chance = spell_list->engaged_beneficial_other_chance;
+		_engaged_detrimental_chance = spell_list->engaged_detrimental_chance;
+		_pursue_no_sp_recast_min = spell_list->pursue_no_sp_recast_min;
+		_pursue_no_sp_recast_max = spell_list->pursue_no_sp_recast_max;
+		_pursue_detrimental_chance = spell_list->pursue_detrimental_chance;
+		_idle_no_sp_recast_min = spell_list->idle_no_sp_recast_min;
+		_idle_no_sp_recast_max = spell_list->idle_no_sp_recast_max;
+		_idle_beneficial_chance = spell_list->idle_beneficial_chance;
+	}
+
+	for (auto &e : spell_list->entries) {
+		if (EQ::ValueWithin(GetLevel(), e.minlevel, e.maxlevel) && e.spellid) {
+			if (!e.bucket_name.empty() && !e.bucket_value.empty()) {
+				if (!CheckDataBucket(e.bucket_name, e.bucket_value, e.bucket_comparison)) {
+					continue;
+				}
+			}
+
+			const auto& bs = GetBotSpellSetting(e.spellid);
+			if (bs) {
+				if (!bs->is_enabled) {
+					continue;
+				}
+
+				AddSpellToBotList(
+					bs->priority,
+					e.spellid,
+					e.type,
+					e.manacost,
+					e.recast_delay,
+					e.resist_adjust,
+					e.minlevel,
+					e.maxlevel,
+					bs->min_hp,
+					bs->max_hp,
+					e.bucket_name,
+					e.bucket_value,
+					e.bucket_comparison
+				);
+				continue;
+			}
+
+			if (!GetBotEnforceSpellSetting()) {
+				AddSpellToBotList(
+					e.priority,
+					e.spellid,
+					e.type,
+					e.manacost,
+					e.recast_delay,
+					e.resist_adjust,
+					e.minlevel,
+					e.maxlevel,
+					e.min_hp,
+					e.max_hp,
+					e.bucket_name,
+					e.bucket_value,
+					e.bucket_comparison
+				);
+			} else {
+				AddSpellToBotEnforceList(
+					e.priority,
+					e.spellid,
+					e.type,
+					e.manacost,
+					e.recast_delay,
+					e.resist_adjust,
+					e.minlevel,
+					e.maxlevel,
+					e.min_hp,
+					e.max_hp,
+					e.bucket_name,
+					e.bucket_value,
+					e.bucket_comparison
+				);
+			}
+		}
+	}
+
+	std::sort(AIBot_spells.begin(), AIBot_spells.end(), [](const BotSpells& a, const BotSpells& b) {
+		return a.priority > b.priority;
+	});
+
+	if (IsValidSpell(attack_proc_spell)) {
+		AddProcToWeapon(attack_proc_spell, true, proc_chance);
+
+		if (RuleB(Spells, NPCInnateProcOverride)) {
+			innate_proc_spell_id = attack_proc_spell;
+		}
+	}
+
+	if (IsValidSpell(range_proc_spell)) {
+		AddRangedProc(range_proc_spell, (rproc_chance + 100));
+	}
+
+	if (IsValidSpell(defensive_proc_spell)) {
+		AddDefensiveProc(defensive_proc_spell, (dproc_chance + 100));
+	}
+
+	//Set AI casting variables
+
+	AISpellVar.fail_recast = (_fail_recast) ? _fail_recast : RuleI(Spells, AI_SpellCastFinishedFailRecast);
+	AISpellVar.engaged_no_sp_recast_min = (_engaged_no_sp_recast_min) ? _engaged_no_sp_recast_min : RuleI(Spells, AI_EngagedNoSpellMinRecast);
+	AISpellVar.engaged_no_sp_recast_max = (_engaged_no_sp_recast_max) ? _engaged_no_sp_recast_max : RuleI(Spells, AI_EngagedNoSpellMaxRecast);
+	AISpellVar.engaged_beneficial_self_chance = (_engaged_beneficial_self_chance) ? _engaged_beneficial_self_chance : RuleI(Spells, AI_EngagedBeneficialSelfChance);
+	AISpellVar.engaged_beneficial_other_chance = (_engaged_beneficial_other_chance) ? _engaged_beneficial_other_chance : RuleI(Spells, AI_EngagedBeneficialOtherChance);
+	AISpellVar.engaged_detrimental_chance = (_engaged_detrimental_chance) ? _engaged_detrimental_chance : RuleI(Spells, AI_EngagedDetrimentalChance);
+	AISpellVar.pursue_no_sp_recast_min = (_pursue_no_sp_recast_min) ? _pursue_no_sp_recast_min : RuleI(Spells, AI_PursueNoSpellMinRecast);
+	AISpellVar.pursue_no_sp_recast_max = (_pursue_no_sp_recast_max) ? _pursue_no_sp_recast_max : RuleI(Spells, AI_PursueNoSpellMaxRecast);
+	AISpellVar.pursue_detrimental_chance = (_pursue_detrimental_chance) ? _pursue_detrimental_chance : RuleI(Spells, AI_PursueDetrimentalChance);
+	AISpellVar.idle_no_sp_recast_min = (_idle_no_sp_recast_min) ? _idle_no_sp_recast_min : RuleI(Spells, AI_IdleNoSpellMinRecast);
+	AISpellVar.idle_no_sp_recast_max = (_idle_no_sp_recast_max) ? _idle_no_sp_recast_max : RuleI(Spells, AI_IdleNoSpellMaxRecast);
+	AISpellVar.idle_beneficial_chance = (_idle_beneficial_chance) ? _idle_beneficial_chance : RuleI(Spells, AI_IdleBeneficialChance);
+
+	if (AIBot_spells.empty()) {
+		AIautocastspell_timer->Disable();
+	} else {
+		AIautocastspell_timer->Trigger();
+		AssignBotSpellsToTypes(AIBot_spells, AIBot_spells_by_type); // Assign AIBot_spells to AIBot_spells_by_type with an index
+	}
+	return true;
+}
+
+bool IsSpellInBotList(DBbotspells_Struct* spell_list, uint16 iSpellID) {
+	auto it = std::find_if (
+		spell_list->entries.begin(),
+		spell_list->entries.end(),
+		[iSpellID](const DBbotspells_entries_Struct &a) {
+			return a.spellid == iSpellID;
+		}
+	);
+
+	return it != spell_list->entries.end();
+}
+
+DBbotspells_Struct* ZoneDatabase::GetBotSpells(uint32 bot_spell_id)
+{
+	if (!bot_spell_id) {
+		return nullptr;
+	}
+
+	auto c = bot_spells_cache.find(bot_spell_id);
+	if (c != bot_spells_cache.end()) { // it's in the cache, easy =)
+		return &c->second;
+	}
+
+	if (!bot_spells_loadtried.count(bot_spell_id)) { // no reason to ask the DB again if we have failed once already
+		bot_spells_loadtried.insert(bot_spell_id);
+
+		auto n = NpcSpellsRepository::FindOne(content_db, bot_spell_id);
+		if (!n.id) {
+			return nullptr;
+		}
+
+		DBbotspells_Struct spell_set;
+
+		spell_set.parent_list = n.parent_list;
+		spell_set.attack_proc = n.attack_proc;
+		spell_set.proc_chance = n.proc_chance;
+		spell_set.range_proc = n.range_proc;
+		spell_set.rproc_chance = n.rproc_chance;
+		spell_set.defensive_proc = n.defensive_proc;
+		spell_set.dproc_chance = n.dproc_chance;
+		spell_set.fail_recast = n.fail_recast;
+		spell_set.engaged_no_sp_recast_min = n.engaged_no_sp_recast_min;
+		spell_set.engaged_no_sp_recast_max = n.engaged_no_sp_recast_max;
+		spell_set.engaged_beneficial_self_chance = n.engaged_b_self_chance;
+		spell_set.engaged_beneficial_other_chance = n.engaged_b_other_chance;
+		spell_set.engaged_detrimental_chance = n.engaged_d_chance;
+		spell_set.pursue_no_sp_recast_min = n.pursue_no_sp_recast_min;
+		spell_set.pursue_no_sp_recast_max = n.pursue_no_sp_recast_max;
+		spell_set.pursue_detrimental_chance = n.pursue_d_chance;
+		spell_set.idle_no_sp_recast_min = n.idle_no_sp_recast_min;
+		spell_set.idle_no_sp_recast_max = n.idle_no_sp_recast_max;
+		spell_set.idle_beneficial_chance = n.idle_b_chance;
+
+		auto bse = BotSpellsEntriesRepository::GetWhere(
+			content_db,
+			fmt::format(
+				"npc_spells_id = {}",
+				bot_spell_id
+			)
+		);
+
+		if (!bse.empty()) {
+			for (const auto& e : bse) {
+				DBbotspells_entries_Struct entry;
+
+				entry.spellid           = e.spell_id;
+				entry.type              = e.type;
+				entry.minlevel          = e.minlevel;
+				entry.maxlevel          = e.maxlevel;
+				entry.manacost          = e.manacost;
+				entry.recast_delay      = e.recast_delay;
+				entry.priority          = e.priority;
+				entry.min_hp            = e.min_hp;
+				entry.max_hp            = e.max_hp;
+				entry.resist_adjust     = e.resist_adjust;
+				entry.bucket_name       = e.bucket_name;
+				entry.bucket_value      = e.bucket_value;
+				entry.bucket_comparison = e.bucket_comparison;
+
+				// some spell types don't make much since to be priority 0, so fix that
+				if (!IsBotSpellTypeInnate(entry.type) && entry.priority == 0) {
+					entry.priority = 1;
+				}
+
+				if (e.resist_adjust) {
+					entry.resist_adjust = e.resist_adjust;
+				} else if (IsValidSpell(e.spell_id)) {
+					entry.resist_adjust = spells[e.spell_id].resist_difficulty;
+				}
+
+				spell_set.entries.push_back(entry);
+			}
+		}
+
+		bot_spells_cache.emplace(std::make_pair(bot_spell_id, spell_set));
+
+		return &bot_spells_cache[bot_spell_id];
+	}
+
+	return nullptr;
+}
+
+// adds a spell to the list, taking into account priority and resorting list as needed.
+void Bot::AddSpellToBotList(
+	int16 in_priority,
+	uint16 in_spell_id,
+	uint32 in_type,
+	int16 in_mana_cost,
+	int32 in_recast_delay,
+	int16 in_resist_adjust,
+	uint8 in_min_level,
+	uint8 in_max_level,
+	int8 in_min_hp,
+	int8 in_max_hp,
+	std::string in_bucket_name,
+	std::string in_bucket_value,
+	uint8 in_bucket_comparison
+) {
+	if (!IsValidSpell(in_spell_id)) {
+		return;
+	}
+
+	HasAISpell = true;
+	BotSpells t;
+
+	t.priority          = in_priority;
+	t.spellid           = in_spell_id;
+	t.type              = in_type;
+	t.manacost          = in_mana_cost;
+	t.recast_delay      = in_recast_delay;
+	t.time_cancast      = 0;
+	t.resist_adjust     = in_resist_adjust;
+	t.minlevel          = in_min_level;
+	t.maxlevel          = in_max_level;
+	t.min_hp            = in_min_hp;
+	t.max_hp            = in_max_hp;
+	t.bucket_name       = in_bucket_name;
+	t.bucket_value      = in_bucket_value;
+	t.bucket_comparison = in_bucket_comparison;
+
+	AIBot_spells.push_back(t);
+
+	// If we're going from an empty list, we need to start the timer
+	if (AIBot_spells.empty()) {
+		AIautocastspell_timer->Start(RandomTimer(0, 300), false);
+	}
+}
+
+// adds spells to the list ^spells that are returned if ^enforce is enabled
+void Bot::AddSpellToBotEnforceList(
+	int16 iPriority,
+	uint16 iSpellID,
+	uint32 iType,
+	int16 iManaCost,
+	int32 iRecastDelay,
+	int16 iResistAdjust,
+	uint8 min_level,
+	uint8 max_level,
+	int8 min_hp,
+	int8 max_hp,
+	std::string bucket_name,
+	std::string bucket_value,
+	uint8 bucket_comparison
+) {
+	if (!IsValidSpell(iSpellID)) {
+		return;
+	}
+
+	HasAISpell = true;
+	BotSpells t;
+
+	t.priority			= iPriority;
+	t.spellid			= iSpellID;
+	t.type				= iType;
+	t.manacost			= iManaCost;
+	t.recast_delay		= iRecastDelay;
+	t.time_cancast		= 0;
+	t.resist_adjust		= iResistAdjust;
+	t.minlevel			= min_level;
+	t.maxlevel			= maxlevel;
+	t.min_hp			= min_hp;
+	t.max_hp			= max_hp;
+	t.bucket_name		= bucket_name;
+	t.bucket_value		= bucket_value;
+	t.bucket_comparison	= bucket_comparison;
+
+	AIBot_spells_enforced.push_back(t);
+}
+
+//this gets called from InterruptSpell() for failure or SpellFinished() for success
+void Bot::AI_Bot_Event_SpellCastFinished(bool iCastSucceeded, uint16 slot) {
+	if (slot == 1) {
+		uint32 recovery_time = 0;
+		if (iCastSucceeded) {
+			if (casting_spell_AIindex < AIBot_spells.size()) {
+				recovery_time += spells[AIBot_spells[casting_spell_AIindex].spellid].recovery_time;
+				if (AIBot_spells[casting_spell_AIindex].recast_delay >= 0) {
+					if (AIBot_spells[casting_spell_AIindex].recast_delay < 10000) {
+						AIBot_spells[casting_spell_AIindex].time_cancast = Timer::GetCurrentTime() + (AIBot_spells[casting_spell_AIindex].recast_delay*1000);
+					}
+				}
+				else {
+					AIBot_spells[casting_spell_AIindex].time_cancast = Timer::GetCurrentTime() + spells[AIBot_spells[casting_spell_AIindex].spellid].recast_time;
+				}
+			}
+			if (recovery_time < AIautocastspell_timer->GetSetAtTrigger()) {
+				recovery_time = AIautocastspell_timer->GetSetAtTrigger();
+			}
+			AIautocastspell_timer->Start(recovery_time, false);
+		}
+		else {
+			AIautocastspell_timer->Start(AISpellVar.fail_recast, false);
+		}
+		casting_spell_AIindex = AIBot_spells.size();
+	}
+}
+
+bool Bot::HasBotSpellEntry(uint16 spell_id) {
+	auto* spell_list = content_db.GetBotSpells(GetBotSpellID());
+
+	if (!spell_list) {
+		return false;
+	}
+
+	// Check if Spell ID is found in Bot Spell Entries
+	for (auto& e : spell_list->entries) {
+		if (spell_id == e.spellid) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+bool Bot::CanUseBotSpell(uint16 spell_id) {
+	if (AIBot_spells.empty()) {
+		return false;
+	}
+
+	for (const auto& s : AIBot_spells) {
+		if (!IsValidSpell(s.spellid)) {
+			return false;
+		}
+
+		if (s.spellid != spell_id) {
+			continue;
+		}
+
+		if (s.minlevel > GetLevel()) {
+			return false;
+		}
+
+		return true;
+	}
+
+	return false;
+}
+
+bool Bot::IsValidSpellRange(uint16 spell_id, Mob* tar) {
+	if (!IsValidSpell(spell_id) || !tar) {
+		return false;
+	}
+
+	float range = spells[spell_id].range + GetRangeDistTargetSizeMod(tar);
+
+	if (
+		spells[spell_id].target_type != ST_AETargetHateList &&
+		!IsTargetableAESpell(spell_id) &&
+		IsAnyAESpell(spell_id)
+	) {
+		range = GetAOERange(spell_id);
+	}
+
+	if (RuleB(Bots, EnableBotTGB) && IsTGBCompatibleSpell(spell_id) && IsGroupSpell(spell_id)) {
+		range = spells[spell_id].aoe_range;
+	}
+
+	range = GetActSpellRange(spell_id, range);
+
+	if (HasProjectIllusion() && IsIllusionSpell(spell_id)) {
+		range = 100;
+	}
+
+	float dist2 = DistanceSquared(m_Position, tar->GetPosition());
+	float range2 = range * range;
+	float min_range2 = spells[spell_id].min_range * spells[spell_id].min_range;
+
+	if (dist2 > range2) {
+		//target is out of range.
+		return false;
+	}
+	else if (dist2 < min_range2) {
+		//target is too close range.
+		return false;
+	}
+
+	return true;
+}
+
+BotSpell Bot::GetBestBotSpellForNukeByBodyType(Bot* caster, uint8 body_type, uint16 spell_type, bool AE, Mob* tar) {
+	BotSpell result;
+
+	result.SpellId = 0;
+	result.SpellIndex = 0;
+	result.ManaCost = 0;
+
+	if (!caster || !body_type) {
+		return result;
+	}
+
+	if (tar == nullptr) {
+		tar = caster->GetTarget();
+	}
+
+	switch (body_type) {
+		case BodyType::Undead:
+		case BodyType::SummonedUndead:
+		case BodyType::Vampire:
+			result = GetBestBotSpellForNukeByTargetType(caster, (!AE ? ST_Undead : ST_UndeadAE), spell_type, AE, tar);
+			break;
+		case BodyType::Summoned:
+		case BodyType::Summoned2:
+		case BodyType::Summoned3:
+			result = GetBestBotSpellForNukeByTargetType(caster, (!AE ? ST_Summoned : ST_SummonedAE), spell_type, AE, tar);
+			break;
+		case BodyType::Animal:
+			result = GetBestBotSpellForNukeByTargetType(caster, ST_Animal, spell_type, AE, tar);
+			break;
+		case BodyType::Plant:
+			result = GetBestBotSpellForNukeByTargetType(caster, ST_Plant, spell_type, AE, tar);
+			break;
+		case BodyType::Giant:
+			result = GetBestBotSpellForNukeByTargetType(caster, ST_Giant, spell_type, AE, tar);
+			break;
+		case BodyType::Dragon:
+			result = GetBestBotSpellForNukeByTargetType(caster, ST_Dragon, spell_type, AE, tar);
+			break;
+		default:
+			break;
+	}
+
+	return result;
+}
+
+BotSpell Bot::GetBestBotSpellForRez(Bot* caster, Mob* target, uint16 spell_type) {
+	BotSpell result;
+
+	result.SpellId = 0;
+	result.SpellIndex = 0;
+	result.ManaCost = 0;
+
+	if (caster) {
+		std::list<BotSpell> bot_spell_list = GetBotSpellsForSpellEffect(caster, spell_type, SpellEffect::Revive);
+
+		for (std::list<BotSpell>::iterator bot_spell_list_itr = bot_spell_list.begin(); bot_spell_list_itr != bot_spell_list.end(); ++bot_spell_list_itr) {
+			if (
+				IsResurrectSpell(bot_spell_list_itr->SpellId) &&
+				caster->CheckSpellRecastTimer(bot_spell_list_itr->SpellId)
+			) {
+				result.SpellId = bot_spell_list_itr->SpellId;
+				result.SpellIndex = bot_spell_list_itr->SpellIndex;
+				result.ManaCost = bot_spell_list_itr->ManaCost;
+
+				break;
+			}
+		}
+	}
+
+	return result;
+}
+
+BotSpell Bot::GetBestBotSpellForCharm(Bot* caster, Mob* target, uint16 spell_type) {
+	BotSpell result;
+
+	result.SpellId = 0;
+	result.SpellIndex = 0;
+	result.ManaCost = 0;
+
+	if (caster) {
+		std::list<BotSpell> bot_spell_list = GetBotSpellsForSpellEffect(caster, spell_type, SpellEffect::Charm);
+
+		for (std::list<BotSpell>::iterator bot_spell_list_itr = bot_spell_list.begin(); bot_spell_list_itr != bot_spell_list.end(); ++bot_spell_list_itr) {
+			if (
+				IsCharmSpell(bot_spell_list_itr->SpellId) &&
+				caster->CastChecks(bot_spell_list_itr->SpellId, target, spell_type)
+			) {
+				result.SpellId = bot_spell_list_itr->SpellId;
+				result.SpellIndex = bot_spell_list_itr->SpellIndex;
+				result.ManaCost = bot_spell_list_itr->ManaCost;
+
+				break;
+			}
+		}
+	}
+
+	return result;
+}

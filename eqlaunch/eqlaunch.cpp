@@ -1,37 +1,35 @@
-/*	EQEMu: Everquest Server Emulator
-	Copyright (C) 2001-2006 EQEMu Development Team (http://eqemulator.net)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
+#include "common/crash.h"
+#include "common/eqemu_config.h"
+#include "common/eqemu_logsys.h"
+#include "common/path_manager.h"
+#include "common/platform.h"
+#include "common/proc_launcher.h"
+#include "common/servertalk.h"
+#include "common/unix.h"
+#include "eqlaunch/worldserver.h"
+#include "eqlaunch/zone_launch.h"
 
-#include "../common/global_define.h"
-#include "../common/eqemu_logsys.h"
-#include "../common/proc_launcher.h"
-#include "../common/eqemu_config.h"
-#include "../common/servertalk.h"
-#include "../common/platform.h"
-#include "../common/crash.h"
-#include "worldserver.h"
-#include "zone_launch.h"
-#include <vector>
+#include <csignal>
+#include <ctime>
 #include <map>
 #include <set>
-#include <signal.h>
-#include <time.h>
-
-EQEmuLogSys Log;
 
 bool RunLoops = false;
 
@@ -39,21 +37,23 @@ void CatchSignal(int sig_num);
 
 int main(int argc, char *argv[]) {
 	RegisterExecutablePlatform(ExePlatformLaunch);
-	Log.LoadLogSettingsDefaults();
+	EQEmuLogSys::Instance()->LoadLogSettingsDefaults();
 	set_exception_handler();
+
+	PathManager::Instance()->Init();
 
 	std::string launcher_name;
 	if(argc == 2) {
 		launcher_name = argv[1];
 	}
 	if(launcher_name.length() < 1) {
-		Log.Out(Logs::Detail, Logs::Launcher, "You must specfify a launcher name as the first argument to this program.");
+		Log(Logs::Detail, Logs::Launcher, "You must specfify a launcher name as the first argument to this program.");
 		return 1;
 	}
 
-	Log.Out(Logs::Detail, Logs::Launcher, "Loading server configuration..");
+	Log(Logs::Detail, Logs::Launcher, "Loading server configuration..");
 	if (!EQEmuConfig::LoadConfig()) {
-		Log.Out(Logs::Detail, Logs::Launcher, "Loading server configuration failed.");
+		Log(Logs::Detail, Logs::Launcher, "Loading server configuration failed.");
 		return 1;
 	}
 	auto Config = EQEmuConfig::get();
@@ -62,16 +62,16 @@ int main(int argc, char *argv[]) {
 	* Setup nice signal handlers
 	*/
 	if (signal(SIGINT, CatchSignal) == SIG_ERR)	{
-		Log.Out(Logs::Detail, Logs::Launcher, "Could not set signal handler");
+		Log(Logs::Detail, Logs::Launcher, "Could not set signal handler");
 		return 1;
 	}
 	if (signal(SIGTERM, CatchSignal) == SIG_ERR)	{
-		Log.Out(Logs::Detail, Logs::Launcher, "Could not set signal handler");
+		Log(Logs::Detail, Logs::Launcher, "Could not set signal handler");
 		return 1;
 	}
 	#ifndef WIN32
 	if (signal(SIGPIPE, SIG_IGN) == SIG_ERR)	{
-		Log.Out(Logs::Detail, Logs::Launcher, "Could not set signal handler");
+		Log(Logs::Detail, Logs::Launcher, "Could not set signal handler");
 		return 1;
 	}
 
@@ -91,27 +91,25 @@ int main(int argc, char *argv[]) {
 
 	std::map<std::string, ZoneLaunch *> zones;
 	WorldServer world(zones, launcher_name.c_str(), Config);
-	if (!world.Connect()) {
-		Log.Out(Logs::Detail, Logs::Launcher, "worldserver.Connect() FAILED! Will retry.");
-	}
 
 	std::map<std::string, ZoneLaunch *>::iterator zone, zend;
 	std::set<std::string> to_remove;
 
 	Timer InterserverTimer(INTERSERVER_TIMER); // does auto-reconnect
 
-	Log.Out(Logs::Detail, Logs::Launcher, "Starting main loop...");
+	Log(Logs::Detail, Logs::Launcher, "Starting main loop...");
 
 	ProcLauncher *launch = ProcLauncher::get();
+
 	RunLoops = true;
-	while(RunLoops) {
+	auto loop_fn = [&](EQ::Timer* t) {
 		//Advance the timer to our current point in time
 		Timer::SetCurrentTime();
 
-		/*
-		* Process the world connection
-		*/
-		world.Process();
+		if (!RunLoops) {
+			EQ::EventLoop::Get().Shutdown();
+			return;
+		}
 
 		/*
 		* Let the process manager look for dead children
@@ -123,40 +121,31 @@ int main(int argc, char *argv[]) {
 		*/
 		zone = zones.begin();
 		zend = zones.end();
-		for(; zone != zend; ++zone) {
-			if(!zone->second->Process())
+		for (; zone != zend; ++zone) {
+			if (!zone->second->Process())
 				to_remove.insert(zone->first);
 		}
 
 		/*
 		* Kill off any zones which have stopped
 		*/
-		while(!to_remove.empty()) {
+		while (!to_remove.empty()) {
 			std::string rem = *to_remove.begin();
 			to_remove.erase(rem);
 			zone = zones.find(rem);
-			if(zone == zones.end()) {
+			if (zone == zones.end()) {
 				//wtf...
 				continue;
 			}
 			delete zone->second;
 			zones.erase(rem);
 		}
+	};
 
+	EQ::Timer process_timer(loop_fn);
+	process_timer.Start(32, true);
 
-		if (InterserverTimer.Check()) {
-			if (world.TryReconnect() && (!world.Connected()))
-				world.AsyncConnect();
-		}
-
-		/*
-		* Take a nice nap until next cycle
-		*/
-		if(zones.empty())
-			Sleep(5000);
-		else
-			Sleep(2000);
-	}
+	EQ::EventLoop::Get().Run();
 
 	//try to be semi-nice about this... without waiting too long
 	zone = zones.begin();
@@ -175,14 +164,14 @@ int main(int argc, char *argv[]) {
 		delete zone->second;
 	}
 
-	Log.CloseFileLogs();
+	EQEmuLogSys::Instance()->CloseFileLogs();
 
 	return 0;
 }
 
 
 void CatchSignal(int sig_num) {
-	Log.Out(Logs::Detail, Logs::Launcher, "Caught signal %d", sig_num);
+	Log(Logs::Detail, Logs::Launcher, "Caught signal %d", sig_num);
 	RunLoops = false;
 }
 

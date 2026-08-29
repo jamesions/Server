@@ -1,104 +1,90 @@
-/*	EQEMu: Everquest Server Emulator
-	Copyright (C) 2001-2010 EQEMu Development Team (http://eqemulator.net)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
-#ifndef EQEMU_ENCRYPTION_H
-#define EQEMU_ENCRYPTION_H
+#pragma once
 
-#ifdef WIN32
-#include <windows.h>
+#include "common/eqemu_logsys.h"
+#include "common/strings.h"
+#include "common/types.h"
+#include "loginserver/login_types.h"
+
 #include <string>
 
-typedef char*(*DLLFUNC_DecryptUsernamePassword)(const char*, unsigned int, int);
-typedef char*(*DLLFUNC_Encrypt)(const char*, unsigned int, unsigned int&);
-typedef void(*DLLFUNC_HeapDelete)(char*);
-
-/**
-* Basic windows encryption plugin.
-* Handles the managment of the plugin.
-*/
-class Encryption
-{
-public:
-	/**
-	* Constructor, sets all member pointers to nullptr.
-	*/
-	Encryption() : h_dll(nullptr), encrypt_func(nullptr), decrypt_func(nullptr), delete_func(nullptr) { };
-
-	/**
-	* Destructor, if it's loaded it unloads this library.
-	*/
-	~Encryption() { if(Loaded()) { Unload(); } }
-
-	/**
-	* Returns true if the dll is loaded, otherwise false.
-	*/
-	inline bool	Loaded() { return (h_dll != nullptr); }
-
-	/**
-	* Loads the plugin.
-	* True if there are no errors, false if there was an error.
-	*/
-	bool LoadCrypto(std::string name);
-
-	/**
-	* Wrapper around the plugin's decrypt function.
-	*/
-	char* DecryptUsernamePassword(const char* encryptedBuffer, unsigned int bufferSize, int mode);
-
-	/**
-	* Wrapper around the plugin's encrypt function.
-	*/
-	char* Encrypt(const char* buffer, unsigned int bufferSize, unsigned int &outSize);
-
-	/**
-	* Wrapper around the plugin's delete function.
-	*/
-	void DeleteHeap(char* buffer);
-
-private:
-	/**
-	* Loads the named dll into memory.
-	* Returns true if there were no errors, otherwise return false.
-	*/
-	bool Load(const char *name);
-
-	/**
-	* Frees the dll from memory if it's loaded.
-	*/
-	void Unload();
-
-	/**
-	* Similar in function to *sym = GetProcAddress(h_dll, name).
-	* Returns true if there were no errors, false otherwise.
-	*/
-	bool GetSym(const char *name, void **sym);
-
-	/**
-	* Similar in function to return GetProcAddress(h_dll, name).
-	* Returns a pointer to the function if it is found, null on an error.
-	*/
-	void *GetSym(const char *name);
-
-	HINSTANCE h_dll;
-	DLLFUNC_Encrypt encrypt_func;
-	DLLFUNC_DecryptUsernamePassword decrypt_func;
-	DLLFUNC_HeapDelete delete_func;
+enum EncryptionMode {
+	EncryptionModeMD5            = 1,
+	EncryptionModeMD5PassUser    = 2,
+	EncryptionModeMD5UserPass    = 3,
+	EncryptionModeMD5Triple      = 4,
+	EncryptionModeSHA            = 5,
+	EncryptionModeSHAPassUser    = 6,
+	EncryptionModeSHAUserPass    = 7,
+	EncryptionModeSHATriple      = 8,
+	EncryptionModeSHA512         = 9,
+	EncryptionModeSHA512PassUser = 10,
+	EncryptionModeSHA512UserPass = 11,
+	EncryptionModeSHA512Triple   = 12,
+	EncryptionModeArgon2         = 13,
+	EncryptionModeSCrypt         = 14
 };
 
-#endif
-#endif
+namespace CryptoHash {
+	const int md5_hash_length    = 32;
+	const int sha1_hash_length   = 40;
+	const int sha512_hash_length = 128;
+}
 
+std::string GetEncryptionByModeId(uint32 mode);
+
+// DES-CBC with an all-zero key and IV (EQ login protocol obfuscation, not security).
+// On encrypt, a trailing partial block is zero-padded to the next 8-byte boundary, so
+// buffer_out must be at least ((buffer_in_sz + 7) / 8) * 8 bytes. On decrypt, buffer_in_sz
+// must already be a multiple of 8 or the call returns nullptr.
+const char *eqcrypt_block(const char *buffer_in, size_t buffer_in_sz, char *buffer_out, bool enc);
+std::string eqcrypt_hash(const std::string &username, const std::string &password, int mode);
+bool eqcrypt_verify_hash(const std::string &username, const std::string &password, const std::string &pwhash, int mode);
+
+// OpenSSL 3.0 moved DES behind the "legacy" provider; these load/unload it
+// for the lifetime of the process. No-op when built against mbedtls.
+bool eqcrypt_init();
+void eqcrypt_shutdown();
+
+struct EncryptionResult {
+	std::string password;
+	int         mode = 0;
+	std::string mode_name;
+};
+
+inline EncryptionResult EncryptPasswordFromContext(LoginAccountContext c, int mode = EncryptionModeSCrypt)
+{
+	if (mode == 0) {
+		LogError("Encryption mode not set!");
+		return {};
+	}
+
+	EncryptionResult r;
+	r.password  = eqcrypt_hash(
+		c.username,
+		c.password,
+		mode
+	);
+	r.mode      = mode;
+	r.mode_name = GetEncryptionByModeId(r.mode);
+
+	LogInfo("Encrypted password for user [{}] using mode [{}] ({})", c.username, r.mode_name, r.mode);
+
+	return r;
+}

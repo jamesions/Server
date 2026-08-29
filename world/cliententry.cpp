@@ -1,301 +1,365 @@
-/*	EQEMu: Everquest Server Emulator
-	Copyright (C) 2001-2005 EQEMu Development Team (http://eqemulator.net)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
-#include "../common/global_define.h"
 #include "cliententry.h"
-#include "clientlist.h"
-#include "login_server.h"
-#include "login_server_list.h"
-#include "worlddb.h"
-#include "zoneserver.h"
-#include "world_config.h"
-#include "../common/guilds.h"
-#include "../common/string_util.h"
 
-extern uint32 numplayers;
-extern LoginServerList loginserverlist;
-extern ClientList		client_list;
-extern volatile bool RunLoops;
+#include "world/clientlist.h"
+#include "world/login_server_list.h"
+#include "world/login_server.h"
+#include "world/shared_task_manager.h"
+#include "world/world_config.h"
+#include "world/worlddb.h"
+#include "world/zoneserver.h"
 
-ClientListEntry::ClientListEntry(uint32 in_id, uint32 iLSID, const char* iLoginName, const char* iLoginKey, int16 iWorldAdmin, uint32 ip, uint8 local)
-: id(in_id)
+extern uint32            numplayers;
+extern volatile bool     RunLoops;
+
+ClientListEntry::ClientListEntry(
+	uint32 id,
+	uint32 login_server_id,
+	const char *login_server_name,
+	const char *account_name,
+	const char *login_key,
+	int16 is_world_admin,
+	uint32 ip_address,
+	uint8 local
+)
+	: m_id(id)
 {
 	ClearVars(true);
 
-	pIP = ip;
-	pLSID = iLSID;
-	if(iLSID > 0)
-		paccountid = database.GetAccountIDFromLSID(iLSID, paccountname, &padmin);
-	strn0cpy(plsname, iLoginName, sizeof(plsname));
-	strn0cpy(plskey, iLoginKey, sizeof(plskey));
-	pworldadmin = iWorldAdmin;
-	plocal=(local==1);
+	LogDebug(
+		"id [{}] loginserver_id [{}] loginserver_name [{}] login_name [{}] login_key [{}] is_world_admin [{}] ip [{}] local [{}]",
+		id,
+		login_server_id,
+		login_server_name,
+		account_name,
+		login_key,
+		is_world_admin,
+		ip_address,
+		local
+	);
 
-	pinstance = 0;
+	m_ip_address      = ip_address;
+	m_login_server_id = login_server_id;
+	if (login_server_id > 0) {
+		m_account_id = database.GetAccountIDFromLSID(
+			login_server_name,
+			login_server_id,
+			m_account_name,
+			&m_admin
+		);
+	}
+
+	strn0cpy(m_login_account_name, account_name, sizeof(m_login_account_name));
+	strn0cpy(m_key, login_key, sizeof(m_key));
+	strn0cpy(m_source_loginserver, login_server_name, sizeof(m_source_loginserver));
+
+	m_world_admin = is_world_admin;
+	m_is_local    = (local == 1);
+
+	memset(m_lfg_comments, 0, 64);
 }
 
-ClientListEntry::ClientListEntry(uint32 in_id, uint32 iAccID, const char* iAccName, MD5& iMD5Pass, int16 iAdmin)
-: id(in_id)
+ClientListEntry::ClientListEntry(uint32 in_id, ZoneServer *z, ServerClientList_Struct *scl, CLE_Status online)
+	: m_id(in_id)
 {
 	ClearVars(true);
 
-	pIP = 0;
-	pLSID = 0;
-	pworldadmin = 0;
+	m_ip_address      = 0;
+	m_login_server_id = scl->LSAccountID;
+	strn0cpy(m_login_account_name, scl->name, sizeof(m_login_account_name));
+	strn0cpy(m_key, scl->lskey, sizeof(m_key));
+	m_world_admin = 0;
 
-	paccountid = iAccID;
-	strn0cpy(paccountname, iAccName, sizeof(paccountname));
-	pMD5Pass = iMD5Pass;
-	padmin = iAdmin;
+	m_account_id = scl->AccountID;
+	strn0cpy(m_account_name, scl->AccountName, sizeof(m_account_name));
+	m_admin = scl->Admin;
 
-	pinstance = 0;
+	m_instance         = 0;
+	m_lfg_from_level   = 0;
+	m_lfg_to_level     = 0;
+	m_lfg_match_filter = false;
+	memset(m_lfg_comments, 0, 64);
+
+	if (online >= CLE_Status::Zoning) {
+		Update(z, scl, online);
+	}
+	else {
+		SetOnline(online);
+	}
 }
 
-ClientListEntry::ClientListEntry(uint32 in_id, ZoneServer* iZS, ServerClientList_Struct* scl, int8 iOnline)
-: id(in_id)
+ClientListEntry::~ClientListEntry()
 {
-	ClearVars(true);
-
-	pIP = 0;
-	pLSID = scl->LSAccountID;
-	strn0cpy(plsname, scl->name, sizeof(plsname));
-	strn0cpy(plskey, scl->lskey, sizeof(plskey));
-	pworldadmin = 0;
-
-	paccountid = scl->AccountID;
-	strn0cpy(paccountname, scl->AccountName, sizeof(paccountname));
-	padmin = scl->Admin;
-
-	pinstance = 0;
-
-	if (iOnline >= CLE_Status_Zoning)
-		Update(iZS, scl, iOnline);
-	else
-		SetOnline(iOnline);
-}
-
-ClientListEntry::~ClientListEntry() {
 	if (RunLoops) {
 		Camp(); // updates zoneserver's numplayers
-		client_list.RemoveCLEReferances(this);
+		ClientList::Instance()->RemoveCLEReferances(this);
 	}
-	for (auto &elem : tell_queue)
+	for (auto &elem: m_tell_queue) {
 		safe_delete_array(elem);
-	tell_queue.clear();
+	}
+	m_tell_queue.clear();
 }
 
-void ClientListEntry::SetChar(uint32 iCharID, const char* iCharName) {
-	pcharid = iCharID;
-	strn0cpy(pname, iCharName, sizeof(pname));
+void ClientListEntry::SetChar(uint32 iCharID, const char *iCharName)
+{
+	m_char_id = iCharID;
+	strn0cpy(m_char_name, iCharName, sizeof(m_char_name));
 }
 
-void ClientListEntry::SetOnline(ZoneServer* iZS, int8 iOnline) {
-	if (iZS == this->Server())
-		SetOnline(iOnline);
-}
+void ClientListEntry::SetOnline(CLE_Status iOnline)
+{
+	LogClientLogin(
+		"Online status [{}] ({}) status [{}] ({})",
+		AccountName(),
+		AccountID(),
+		CLEStatusString[iOnline],
+		static_cast<int>(iOnline)
+	);
 
-void ClientListEntry::SetOnline(int8 iOnline) {
-	if (iOnline >= CLE_Status_Online && pOnline < CLE_Status_Online)
+	if (iOnline >= CLE_Status::Online && m_online < CLE_Status::Online) {
 		numplayers++;
-	else if (iOnline < CLE_Status_Online && pOnline >= CLE_Status_Online) {
+	}
+	else if (iOnline < CLE_Status::Online && m_online >= CLE_Status::Online) {
 		numplayers--;
 	}
-	if (iOnline != CLE_Status_Online || pOnline < CLE_Status_Online)
-		pOnline = iOnline;
-	if (iOnline < CLE_Status_Zoning)
+	if (iOnline != CLE_Status::Online || m_online < CLE_Status::Online) {
+		m_online = iOnline;
+	}
+	if (iOnline < CLE_Status::Zoning) {
 		Camp();
-	if (pOnline >= CLE_Status_Online)
-		stale = 0;
+	}
+	if (m_online >= CLE_Status::Online) {
+		m_stale = 0;
+	}
 }
-void ClientListEntry::LSUpdate(ZoneServer* iZS){
-	if(WorldConfig::get()->UpdateStats){
+
+void ClientListEntry::LSUpdate(ZoneServer *iZS)
+{
+	if (WorldConfig::get()->UpdateStats) {
 		auto pack = new ServerPacket;
-		pack->opcode = ServerOP_LSZoneInfo;
-		pack->size = sizeof(ZoneInfo_Struct);
+		pack->opcode  = ServerOP_LSZoneInfo;
+		pack->size    = sizeof(LoginserverZoneInfoUpdate);
 		pack->pBuffer = new uchar[pack->size];
-		ZoneInfo_Struct* zone =(ZoneInfo_Struct*)pack->pBuffer;
-		zone->count=iZS->NumPlayers();
-		zone->zone = iZS->GetZoneID();
+		auto *zone = (LoginserverZoneInfoUpdate *) pack->pBuffer;
+		zone->count    = iZS->NumPlayers();
+		zone->zone     = iZS->GetZoneID();
 		zone->zone_wid = iZS->GetID();
-		loginserverlist.SendPacket(pack);
+		LoginServerList::Instance()->SendPacket(pack);
 		safe_delete(pack);
 	}
 }
-void ClientListEntry::LSZoneChange(ZoneToZone_Struct* ztz){
-	if(WorldConfig::get()->UpdateStats){
+
+void ClientListEntry::LSZoneChange(ZoneToZone_Struct *ztz)
+{
+	if (WorldConfig::get()->UpdateStats) {
 		auto pack = new ServerPacket;
-		pack->opcode = ServerOP_LSPlayerZoneChange;
-		pack->size = sizeof(ServerLSPlayerZoneChange_Struct);
+		pack->opcode  = ServerOP_LSPlayerZoneChange;
+		pack->size    = sizeof(ServerLSPlayerZoneChange_Struct);
 		pack->pBuffer = new uchar[pack->size];
-		ServerLSPlayerZoneChange_Struct* zonechange =(ServerLSPlayerZoneChange_Struct*)pack->pBuffer;
+		auto *zonechange = (ServerLSPlayerZoneChange_Struct *) pack->pBuffer;
 		zonechange->lsaccount_id = LSID();
-		zonechange->from = ztz->current_zone_id;
-		zonechange->to = ztz->requested_zone_id;
-		loginserverlist.SendPacket(pack);
+		zonechange->from         = ztz->current_zone_id;
+		zonechange->to           = ztz->requested_zone_id;
+		LoginServerList::Instance()->SendPacket(pack);
 		safe_delete(pack);
 	}
 }
-void ClientListEntry::Update(ZoneServer* iZS, ServerClientList_Struct* scl, int8 iOnline) {
-	if (pzoneserver != iZS) {
-		if (pzoneserver){
-			pzoneserver->RemovePlayer();
-			LSUpdate(pzoneserver);
+
+void ClientListEntry::Update(ZoneServer *iZS, ServerClientList_Struct *scl, CLE_Status iOnline)
+{
+	if (m_zone_server != iZS) {
+		if (m_zone_server) {
+			m_zone_server->RemovePlayer();
+			LSUpdate(m_zone_server);
 		}
-		if (iZS){
+		if (iZS) {
 			iZS->AddPlayer();
 			LSUpdate(iZS);
 		}
 	}
-	pzoneserver = iZS;
-	pzone = scl->zone;
-	pinstance = scl->instance_id;
-	pcharid = scl->charid;
+	m_zone_server          = iZS;
+	m_zone                 = scl->zone;
+	m_instance             = scl->instance_id;
+	m_char_id              = scl->charid;
 
-	strcpy(pname, scl->name);
-	if (paccountid == 0) {
-		paccountid = scl->AccountID;
-		strcpy(paccountname, scl->AccountName);
-		strcpy(plsname, scl->AccountName);
-		pIP = scl->IP;
-		pLSID = scl->LSAccountID;
-		strn0cpy(plskey, scl->lskey, sizeof(plskey));
+	strcpy(m_char_name, scl->name);
+	if (m_account_id == 0) {
+		m_account_id = scl->AccountID;
+		strcpy(m_account_name, scl->AccountName);
+		strcpy(m_login_account_name, scl->AccountName);
+		m_ip_address      = scl->IP;
+		m_login_server_id = scl->LSAccountID;
+		strn0cpy(m_key, scl->lskey, sizeof(m_key));
 	}
-	padmin = scl->Admin;
-	plevel = scl->level;
-	pclass_ = scl->class_;
-	prace = scl->race;
-	panon = scl->anon;
-	ptellsoff = scl->tellsoff;
-	pguild_id = scl->guild_id;
-	pLFG = scl->LFG;
-	gm = scl->gm;
-	pClientVersion = scl->ClientVersion;
+	m_admin                = scl->Admin;
+	m_level                = scl->level;
+	m_class_               = scl->class_;
+	m_race                 = scl->race;
+	m_anon                 = scl->anon;
+	m_tells_off            = scl->tellsoff;
+	m_guild_id             = scl->guild_id;
+	m_guild_rank           = scl->guild_rank;
+	m_guild_tribute_opt_in = scl->guild_tribute_opt_in;
+	m_lfg                  = scl->LFG;
+	m_gm                   = scl->gm;
+	m_client_version       = scl->ClientVersion;
 
 	// Fields from the LFG Window
-	if((scl->LFGFromLevel != 0) && (scl->LFGToLevel != 0)) {
-		pLFGFromLevel = scl->LFGFromLevel;
-		pLFGToLevel = scl->LFGToLevel;
-		pLFGMatchFilter = scl->LFGMatchFilter;
-		memcpy(pLFGComments, scl->LFGComments, sizeof(pLFGComments));
+	if ((scl->LFGFromLevel != 0) && (scl->LFGToLevel != 0)) {
+		m_lfg_from_level   = scl->LFGFromLevel;
+		m_lfg_to_level     = scl->LFGToLevel;
+		m_lfg_match_filter = scl->LFGMatchFilter;
+		memcpy(m_lfg_comments, scl->LFGComments, sizeof(m_lfg_comments));
 	}
 
 	SetOnline(iOnline);
 }
 
-void ClientListEntry::LeavingZone(ZoneServer* iZS, int8 iOnline) {
-	if (iZS != 0 && iZS != pzoneserver)
+void ClientListEntry::LeavingZone(ZoneServer *iZS, CLE_Status iOnline)
+{
+	if (iZS != 0 && iZS != m_zone_server) {
 		return;
+	}
 	SetOnline(iOnline);
 
-	if (pzoneserver){
-		pzoneserver->RemovePlayer();
-		LSUpdate(pzoneserver);
+	SharedTaskManager::Instance()->RemoveActiveInvitationByCharacterID(CharID());
+
+	if (m_zone_server) {
+		m_zone_server->RemovePlayer();
+		LSUpdate(m_zone_server);
 	}
-	pzoneserver = 0;
-	pzone = 0;
+	m_zone_server = 0;
+	m_zone        = 0;
 }
 
-void ClientListEntry::ClearVars(bool iAll) {
+void ClientListEntry::ClearVars(bool iAll)
+{
 	if (iAll) {
-		pOnline = CLE_Status_Never;
-		stale = 0;
+		m_online = CLE_Status::Never;
+		m_stale  = 0;
 
-		pLSID = 0;
-		memset(plsname, 0, sizeof(plsname));
-		memset(plskey, 0, sizeof(plskey));
-		pworldadmin = 0;
+		m_login_server_id = 0;
+		memset(m_login_account_name, 0, sizeof(m_login_account_name));
+		memset(m_key, 0, sizeof(m_key));
+		m_world_admin = 0;
 
-		paccountid = 0;
-		memset(paccountname, 0, sizeof(paccountname));
-		padmin = 0;
+		m_account_id = 0;
+		memset(m_account_name, 0, sizeof(m_account_name));
+		m_admin = AccountStatus::Player;
 	}
-	pzoneserver = 0;
-	pzone = 0;
-	pcharid = 0;
-	memset(pname, 0, sizeof(pname));
-	plevel = 0;
-	pclass_ = 0;
-	prace = 0;
-	panon = 0;
-	ptellsoff = 0;
-	pguild_id = GUILD_NONE;
-	pLFG = 0;
-	gm = 0;
-	pClientVersion = 0;
-	for (auto &elem : tell_queue)
+	m_zone_server = 0;
+	m_zone        = 0;
+	m_char_id     = 0;
+	memset(m_char_name, 0, sizeof(m_char_name));
+	m_level          = 0;
+	m_class_         = 0;
+	m_race           = 0;
+	m_anon           = 0;
+	m_tells_off      = 0;
+	m_guild_id       = GUILD_NONE;
+	m_guild_rank     = 0;
+	m_lfg            = 0;
+	m_gm             = 0;
+	m_client_version = 0;
+	for (auto &elem: m_tell_queue) {
 		safe_delete_array(elem);
-	tell_queue.clear();
+	}
+	m_tell_queue.clear();
 }
 
-void ClientListEntry::Camp(ZoneServer* iZS) {
-	if (iZS != 0 && iZS != pzoneserver)
+void ClientListEntry::Camp(ZoneServer *iZS)
+{
+	if (iZS != 0 && iZS != m_zone_server) {
 		return;
-	if (pzoneserver){
-		pzoneserver->RemovePlayer();
-		LSUpdate(pzoneserver);
+	}
+	if (m_zone_server) {
+		m_zone_server->RemovePlayer();
+		LSUpdate(m_zone_server);
 	}
 
 	ClearVars();
 
-	stale = 0;
+	m_stale = 0;
 }
 
-bool ClientListEntry::CheckStale() {
-	stale++;
-	if (stale > 20) {
-		if (pOnline > CLE_Status_Offline)
-			SetOnline(CLE_Status_Offline);
-		else
-			return true;
+bool ClientListEntry::CheckStale()
+{
+	m_stale++;
+	if (m_stale > 20) {
+		if (m_online > CLE_Status::Offline) {
+			SetOnline(CLE_Status::Offline);
+		}
+
+		return true;
 	}
 	return false;
 }
 
-bool ClientListEntry::CheckAuth(uint32 iLSID, const char* iKey) {
-	if (strncmp(plskey, iKey,10) == 0) {
-		if (paccountid == 0 && LSID()>0) {
-			int16 tmpStatus = WorldConfig::get()->DefaultStatus;
-			paccountid = database.CreateAccount(plsname, 0, tmpStatus, LSID());
-			if (!paccountid) {
-				Log.Out(Logs::Detail, Logs::World_Server,"Error adding local account for LS login: '%s', duplicate name?" ,plsname);
+bool ClientListEntry::CheckAuth(uint32 loginserver_account_id, const char *key_password)
+{
+	LogDebug(
+		"ls_account_id [{}] key_password [{}] key [{}]",
+		loginserver_account_id,
+		key_password,
+		m_key
+	);
+
+	if (m_login_server_id == loginserver_account_id && strncmp(m_key, key_password, 10) == 0) {
+		LogDebug(
+			"ls_account_id [{}] key_password [{}] m_key [{}] lsid [{}] m_account_id [{}]",
+			loginserver_account_id,
+			key_password,
+			m_key,
+			LSID(),
+			m_account_id
+		);
+
+		// create account if it doesn't exist
+		if (m_account_id == 0 && LSID() > 0) {
+			int16 default_account_status = WorldConfig::get()->DefaultStatus;
+
+			m_account_id = database.CreateAccount(
+				m_login_account_name,
+				std::string(),
+				default_account_status,
+				m_source_loginserver,
+				LSID()
+			);
+
+			if (!m_account_id) {
+				LogError(
+					"Error adding local account for LS login [{}] [{}], duplicate name",
+					m_source_loginserver,
+					m_login_account_name
+				);
 				return false;
 			}
-			strn0cpy(paccountname, plsname, sizeof(paccountname));
-			padmin = tmpStatus;
+			strn0cpy(m_account_name, m_login_account_name, sizeof(m_account_name));
+			m_admin = default_account_status;
 		}
 		std::string lsworldadmin;
-		if (database.GetVariable("honorlsworldadmin", lsworldadmin))
-			if (atoi(lsworldadmin.c_str()) == 1 && pworldadmin != 0 && (padmin < pworldadmin || padmin == 0))
-				padmin = pworldadmin;
-		return true;
-	}
-	return false;
-}
-
-bool ClientListEntry::CheckAuth(const char* iName, MD5& iMD5Password) {
-	if (LSAccountID() == 0 && strcmp(paccountname, iName) == 0 && pMD5Pass == iMD5Password)
-		return true;
-	return false;
-}
-
-bool ClientListEntry::CheckAuth(uint32 id, const char* iKey, uint32 ip) {
-	if (pIP==ip && strncmp(plskey, iKey,10) == 0){
-		paccountid = id;
-		database.GetAccountFromID(id,paccountname,&padmin);
+		if (database.GetVariable("honorlsworldadmin", lsworldadmin)) {
+			if (Strings::ToInt(lsworldadmin) == 1 && m_world_admin != 0 &&
+				(m_admin < m_world_admin || m_admin == AccountStatus::Player)) {
+				m_admin = m_world_admin;
+			}
+		}
 		return true;
 	}
 	return false;
@@ -303,20 +367,22 @@ bool ClientListEntry::CheckAuth(uint32 id, const char* iKey, uint32 ip) {
 
 void ClientListEntry::ProcessTellQueue()
 {
-	if (!Server())
+	if (!Server()) {
 		return;
+	}
 
 	ServerPacket *pack;
-	auto it = tell_queue.begin();
-	while (it != tell_queue.end()) {
-		pack = new ServerPacket(ServerOP_ChannelMessage, sizeof(ServerChannelMessage_Struct) + strlen((*it)->message) + 1);
+	auto         it = m_tell_queue.begin();
+	while (it != m_tell_queue.end()) {
+		pack = new ServerPacket(
+			ServerOP_ChannelMessage,
+			sizeof(ServerChannelMessage_Struct) + strlen((*it)->message) + 1
+		);
 		memcpy(pack->pBuffer, *it, pack->size);
-		pack->Deflate();
 		Server()->SendPacket(pack);
 		safe_delete(pack);
 		safe_delete_array(*it);
-		it = tell_queue.erase(it);
+		it = m_tell_queue.erase(it);
 	}
-	return;
 }
 

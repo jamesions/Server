@@ -1,9 +1,26 @@
-#ifndef EQEMU_LUA_PACKET_H
-#define EQEMU_LUA_PACKET_H
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
+
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
+*/
+#pragma once
+
 #ifdef LUA_EQEMU
 
-#include "lua_ptr.h"
-#include "../common/types.h"
+#include "common/types.h"
+#include "zone/lua_ptr.h"
 
 class EQApplicationPacket;
 
@@ -24,20 +41,31 @@ public:
 	Lua_Packet(int opcode, int size, bool raw);
 	Lua_Packet& operator=(const Lua_Packet& o);
 	Lua_Packet(const Lua_Packet& o);
-	virtual ~Lua_Packet() { if(owned_) { EQApplicationPacket *ptr = GetLuaPtrData(); if(ptr) { delete ptr; } } }
+	virtual ~Lua_Packet();
 
 	int GetSize();
 	int GetOpcode();
 	void SetOpcode(int op);
 	int GetRawOpcode();
+	int GetProtocolOpcode();
 	void SetRawOpcode(int op);
+	int GetWritePosition();
+	void SetWritePosition(int offset);
+	void WriteInt8(int value);
 	void WriteInt8(int offset, int value);
+	void WriteInt16(int value);
 	void WriteInt16(int offset, int value);
+	void WriteInt32(int value);
 	void WriteInt32(int offset, int value);
+	void WriteInt64(int64 value);
 	void WriteInt64(int offset, int64 value);
+	void WriteFloat(float value);
 	void WriteFloat(int offset, float value);
+	void WriteDouble(double value);
 	void WriteDouble(int offset, double value);
+	void WriteString(std::string value);
 	void WriteString(int offset, std::string value);
+	void WriteFixedLengthString(std::string value);
 	void WriteFixedLengthString(int offset, std::string value, int string_length);
 	int ReadInt8(int offset);
 	int ReadInt16(int offset);
@@ -56,5 +84,5 @@ private:
 	bool owned_;
 };
 
-#endif
-#endif
+#endif // LUA_EQEMU
+

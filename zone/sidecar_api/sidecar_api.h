@@ -1,0 +1,31 @@
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
+
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
+*/
+
+#pragma once
+
+#include "common/http/httplib.h"
+
+class SidecarApi {
+public:
+	static void BootWebserver(int req = 0, const std::string& key = "");
+	static void AuthMiddleware(const httplib::Request &req, const httplib::Response &res);
+	static void RequestLogHandler(const httplib::Request &req, const httplib::Response &res);
+	static void TestController(const httplib::Request &req, httplib::Response &res);
+	static void LootSimulatorController(const httplib::Request &req, httplib::Response &res);
+	static void MapBestZController(const httplib::Request &req, httplib::Response &res);
+};

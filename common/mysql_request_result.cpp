@@ -1,3 +1,20 @@
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
+
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 #include "mysql_request_result.h"
 
 
@@ -51,6 +68,7 @@ void MySQLRequestResult::ZeroOut()
 	m_RowCount = 0;
 	m_RowsAffected = 0;
 	m_LastInsertedID = 0;
+	m_error_message = "";
 }
 
 MySQLRequestResult::~MySQLRequestResult()
@@ -136,4 +154,24 @@ MySQLRequestResult& MySQLRequestResult::operator=(MySQLRequestResult&& other)
 	// pre move instance.
 	other.ZeroOut();
 	return *this;
+}
+
+uint32 MySQLRequestResult::GetErrorNumber() const
+{
+	return m_ErrorNumber;
+}
+
+void MySQLRequestResult::SetErrorNumber(uint32 m_error_number)
+{
+	m_ErrorNumber = m_error_number;
+}
+
+const std::string &MySQLRequestResult::GetErrorMessage() const
+{
+	return m_error_message;
+}
+
+void MySQLRequestResult::SetErrorMessage(const std::string &m_error_message)
+{
+	MySQLRequestResult::m_error_message = m_error_message;
 }

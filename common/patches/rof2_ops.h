@@ -1,23 +1,20 @@
-/*	EQEMu: Everquest Server Emulator
-	
-	Copyright (C) 2001-2016 EQEMu Development Team (http://eqemulator.net)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
-
-
 // out-going packets that require an ENCODE translation:
 // Begin RoF2 Encodes
 
@@ -43,30 +40,34 @@ E(OP_ApplyPoison)
 E(OP_AugmentInfo)
 E(OP_Barter)
 E(OP_BazaarSearch)
+E(OP_BecomeTrader)
 E(OP_BeginCast)
 E(OP_BlockedBuffs)
 E(OP_Buff)
 E(OP_BuffCreate)
+E(OP_BuyerItems)
 E(OP_CancelTrade)
 E(OP_CastSpell)
 E(OP_ChannelMessage)
 E(OP_CharInventory)
 E(OP_ClickObjectAction)
-E(OP_ClientUpdate)
 E(OP_Consider)
 E(OP_Damage)
 E(OP_DeleteCharge)
 E(OP_DeleteItem)
 E(OP_DeleteSpawn)
 E(OP_DisciplineUpdate)
-E(OP_DzCompass)
+E(OP_DzChooseZone)
 E(OP_DzExpeditionEndsWarning)
 E(OP_DzExpeditionInfo)
-E(OP_DzExpeditionList)
-E(OP_DzJoinExpeditionConfirm)
-E(OP_DzLeaderStatus)
+E(OP_DzExpeditionInvite)
+E(OP_DzExpeditionLockoutTimers)
 E(OP_DzMemberList)
+E(OP_DzMemberListName)
+E(OP_DzMemberListStatus)
+E(OP_DzSetLeaderName)
 E(OP_Emote)
+E(OP_EvolveItem)
 E(OP_ExpansionInfo)
 E(OP_FormattedMessage)
 E(OP_GMLastName)
@@ -81,24 +82,24 @@ E(OP_GuildBank)
 E(OP_GuildMemberList)
 E(OP_GuildMemberUpdate)
 E(OP_GuildsList)
+E(OP_GuildTributeDonateItem)
 E(OP_HPUpdate)
 E(OP_Illusion)
 E(OP_InspectBuffs)
 E(OP_InspectRequest)
 E(OP_ItemLinkResponse)
 E(OP_ItemPacket)
+E(OP_ItemPreviewRequest)
 E(OP_ItemVerifyReply)
 E(OP_LeadershipExpUpdate)
 E(OP_LogServer)
 E(OP_LootItem)
-E(OP_ManaChange)
 E(OP_MercenaryDataResponse)
 E(OP_MercenaryDataUpdate)
 E(OP_MoveItem)
 E(OP_NewSpawn)
 E(OP_NewZone)
 E(OP_OnLevelMessage)
-//E(OP_OpenNewTasksWindow)
 E(OP_PetBuffWindow)
 E(OP_PlayerProfile)
 E(OP_RaidJoin)
@@ -116,7 +117,6 @@ E(OP_SendZonepoints)
 E(OP_SetGuildRank)
 E(OP_ShopPlayerBuy)
 E(OP_ShopPlayerSell)
-E(OP_ShopRequest)
 E(OP_SkillUpdate)
 E(OP_SomeItemPacketMaybe)
 E(OP_SpawnAppearance)
@@ -149,19 +149,27 @@ D(OP_Animation)
 D(OP_ApplyPoison)
 D(OP_AugmentInfo)
 D(OP_AugmentItem)
+D(OP_Barter)
 D(OP_BazaarSearch)
 D(OP_BlockedBuffs)
+D(OP_BookButton)
 D(OP_Buff)
 D(OP_BuffRemoveRequest)
+D(OP_BuyerItems)
 D(OP_CastSpell)
 D(OP_ChannelMessage)
 D(OP_CharacterCreate)
-D(OP_ClientUpdate)
 D(OP_Consider)
 D(OP_ConsiderCorpse)
 D(OP_Consume)
 D(OP_Damage)
 D(OP_DeleteItem)
+D(OP_DzAddPlayer)
+D(OP_DzChooseZoneReply)
+D(OP_DzExpeditionInviteResponse)
+D(OP_DzMakeLeader)
+D(OP_DzRemovePlayer)
+D(OP_DzSwapPlayer)
 D(OP_Emote)
 D(OP_EnvDamage)
 D(OP_FaceChange)
@@ -177,6 +185,7 @@ D(OP_GuildBank)
 D(OP_GuildDemote)
 D(OP_GuildRemove)
 D(OP_GuildStatus)
+D(OP_GuildTributeDonateItem)
 D(OP_InspectRequest)
 D(OP_ItemLinkClick)
 D(OP_ItemVerifyRequest)
@@ -193,7 +202,7 @@ D(OP_Save)
 D(OP_SetServerFilter)
 D(OP_ShopPlayerBuy)
 D(OP_ShopPlayerSell)
-D(OP_ShopRequest)
+D(OP_ShopSendParcel)
 D(OP_Trader)
 D(OP_TraderBuy)
 D(OP_TradeSkillCombine)

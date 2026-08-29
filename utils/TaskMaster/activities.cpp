@@ -1,3 +1,20 @@
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
+
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 #include <wx/wx.h>
 #include <mysql.h>
 #include <vector>
@@ -127,7 +144,7 @@ void MainFrame::NewActivity(wxCommandEvent& event)
 
 	if(mMysql){
 		char * mActQuery = 0;
-		MakeAnyLenString(&mActQuery, "INSERT INTO `activities` (`taskid`,`activityid`,`step`,`activitytype`,`text1`,`text2`,`text3`,`goalid`,`goalmethod`,`goalcount`,`delivertonpc`,`zoneid`,`optional`) VALUES (%u,%u,%u,%u,'%s','%s','%s',%u,%u,%u,%u,%u,%u)",
+		MakeAnyLenString(&mActQuery, "INSERT INTO `task_activities` (`taskid`,`activityid`,`step`,`activitytype`,`text1`,`text2`,`text3`,`goalid`,`goalmethod`,`goalcount`,`delivertonpc`,`zoneid`,`optional`) VALUES (%u,%u,%u,%u,'%s','%s','%s',%u,%u,%u,%u,%u,%u)",
 				newAct.id, newAct.activityId, newAct.step, newAct.activityType, newAct.text1, newAct.text2, newAct.text3, newAct.goalid, newAct.goalmethod, newAct.goalcount, newAct.deliverToNpc, newAct.zoneid, newAct.optional	);
 
 		mErrorLog->Log(eqEmuLogSQL, "%s", mActQuery);
@@ -167,7 +184,7 @@ void MainFrame::DeleteActivity(wxCommandEvent& event)
 	{
 		if(mMysql){
 			char * mActQuery = 0;
-			MakeAnyLenString(&mActQuery, "DELETE FROM activities WHERE taskid=%u AND activityid=%u",selAct->id, selAct->activityid);
+			MakeAnyLenString(&mActQuery, "DELETE FROM `task_activities` WHERE taskid=%u AND activityid=%u",selAct->id, selAct->activityid);
 			mErrorLog->Log(eqEmuLogSQL, "%s", mActQuery);
 			if (mysql_query(mMysql, mActQuery)) {
 				mErrorLog->Log(eqEmuLogBoth, "MySQL Error: %s", mysql_error(mMysql));
@@ -507,11 +524,11 @@ void MainFrame::SaveActivity(wxCommandEvent& event)
 	ourAct.optional = mActivityOptional->GetValue();
 
 	getStr = mActID->GetValue();
-	ourAct.activityId = atoi(getStr.mb_str());
+	ourAct.activityId = Strings::ToInt(getStr.mb_str());
 	getStr.Clear();
 
 	getStr = mActStep->GetValue();
-	ourAct.step = atoi(getStr.mb_str());
+	ourAct.step = Strings::ToInt(getStr.mb_str());
 	getStr.Clear();
 
 	int type = mActType->GetSelection();
@@ -530,17 +547,17 @@ void MainFrame::SaveActivity(wxCommandEvent& event)
 	}
 
 	getStr = mActDeliver->GetValue();
-	ourAct.deliverToNpc = atoi(getStr.mb_str());
+	ourAct.deliverToNpc = Strings::ToInt(getStr.mb_str());
 	getStr.Clear();
 
 	ourAct.goalmethod = mActMethod->GetSelection();
 
 	getStr = mActGoalID->GetValue();
-	ourAct.goalid = atoi(getStr.mb_str());
+	ourAct.goalid = Strings::ToInt(getStr.mb_str());
 	getStr.Clear();
 
 	getStr = mActGoalCount->GetValue();
-	ourAct.goalcount = atoi(getStr.mb_str());
+	ourAct.goalcount = Strings::ToInt(getStr.mb_str());
 	getStr.Clear();
 
 	if(ourAct.activityId == openedActivity.activityid && ourAct.id == openedActivity.id){
@@ -554,7 +571,7 @@ void MainFrame::SaveActivity(wxCommandEvent& event)
 	if(canUpdate)
 	{
 		char * mQuery = 0;
-		MakeAnyLenString(&mQuery, "UPDATE activities SET step=%u, activitytype=%u, text1='%s', text2='%s', text3='%s', goalid=%u, goalmethod=%u,goalcount=%u, delivertonpc=%u, zoneid=%u, optional=%u WHERE taskid=%u AND activityid =%u",
+		MakeAnyLenString(&mQuery, "UPDATE `task_activities` SET step=%u, activitytype=%u, text1='%s', text2='%s', text3='%s', goalid=%u, goalmethod=%u,goalcount=%u, delivertonpc=%u, zoneid=%u, optional=%u WHERE taskid=%u AND activityid =%u",
 			ourAct.step, ourAct.activityType, MakeStringSQLSafe(ourAct.text1).mb_str(), MakeStringSQLSafe(ourAct.text2).mb_str(), MakeStringSQLSafe(ourAct.text3).mb_str(), ourAct.goalid, ourAct.goalmethod, ourAct.goalcount, ourAct.deliverToNpc, ourAct.zoneid, ourAct.optional, ourAct.id, ourAct.activityId );
 		mErrorLog->Log(eqEmuLogSQL, "%s", mQuery);
 		if (mysql_query(mMysql, mQuery)) {
@@ -565,14 +582,14 @@ void MainFrame::SaveActivity(wxCommandEvent& event)
 	else
 	{
 		char * mQuery = 0;
-		MakeAnyLenString(&mQuery, "DELETE FROM activities WHERE taskid=%u AND activityid=%u", ourAct.id, delid);
+		MakeAnyLenString(&mQuery, "DELETE FROM `task_activities` WHERE taskid=%u AND activityid=%u", ourAct.id, delid);
 		mErrorLog->Log(eqEmuLogSQL, "%s", mQuery);
 		if (mysql_query(mMysql, mQuery)) {
 			mErrorLog->Log(eqEmuLogBoth, "MySQL Error: %s", mysql_error(mMysql));
 			return;
 		}
 
-		MakeAnyLenString(&mQuery, "INSERT INTO `activities` (`taskid`,`activityid`,`step`,`activitytype`,`text1`,`text2`,`text3`,`goalid`,`goalmethod`,`goalcount`,`delivertonpc`,`zoneid`,`optional`) VALUES (%u,%u,%u,%u,'%s','%s','%s',%u,%u,%u,%u,%u,%u)",
+		MakeAnyLenString(&mQuery, "INSERT INTO `task_activities` (`taskid`,`activityid`,`step`,`activitytype`,`text1`,`text2`,`text3`,`goalid`,`goalmethod`,`goalcount`,`delivertonpc`,`zoneid`,`optional`) VALUES (%u,%u,%u,%u,'%s','%s','%s',%u,%u,%u,%u,%u,%u)",
 			ourAct.id, ourAct.activityId, ourAct.step, ourAct.activityType, MakeStringSQLSafe(ourAct.text1).mb_str(), MakeStringSQLSafe(ourAct.text2).mb_str(), MakeStringSQLSafe(ourAct.text3).mb_str(), ourAct.goalid, ourAct.goalmethod, ourAct.goalcount, ourAct.deliverToNpc, ourAct.zoneid, ourAct.optional);
 		mErrorLog->Log(eqEmuLogSQL, "%s", mQuery);
 		if (mysql_query(mMysql, mQuery)) {

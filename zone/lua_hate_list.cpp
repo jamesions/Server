@@ -1,14 +1,29 @@
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
+
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 #ifdef LUA_EQEMU
 
-#include "lua.hpp"
-#include <luabind/luabind.hpp>
-#include <luabind/object.hpp>
-#include <luabind/iterator_policy.hpp>
-
-#include "masterentity.h"
-#include "hate_list.h"
-#include "lua_mob.h"
 #include "lua_hate_list.h"
+
+#include "zone/lua_mob.h"
+#include "zone/masterentity.h"
+
+#include "luabind/iterator_policy.hpp"
+#include "luabind/luabind.hpp"
 
 Lua_Mob Lua_HateEntry::GetEnt() {
 	Lua_Safe_Call_Class(Lua_Mob);
@@ -20,28 +35,28 @@ void Lua_HateEntry::SetEnt(Lua_Mob e) {
 	self->entity_on_hatelist = e;
 }
 
-int Lua_HateEntry::GetDamage() {
+int64 Lua_HateEntry::GetDamage() {
 	Lua_Safe_Call_Int();
 	return self->hatelist_damage;
 }
 
-void Lua_HateEntry::SetDamage(int value) {
+void Lua_HateEntry::SetDamage(int64 value) {
 	Lua_Safe_Call_Void();
 	self->hatelist_damage = value;
 }
 
-int Lua_HateEntry::GetHate() {
+int64 Lua_HateEntry::GetHate() {
 	Lua_Safe_Call_Int();
 	return self->stored_hate_amount;
 }
 
-void Lua_HateEntry::SetHate(int value) {
+void Lua_HateEntry::SetHate(int64 value) {
 	Lua_Safe_Call_Void();
 	self->stored_hate_amount = value;
 }
 
-int Lua_HateEntry::GetFrenzy() {
-	Lua_Safe_Call_Int();
+bool Lua_HateEntry::GetFrenzy() {
+	Lua_Safe_Call_Bool();
 	return self->is_entity_frenzy;
 }
 
@@ -51,19 +66,18 @@ void Lua_HateEntry::SetFrenzy(bool value) {
 }
 
 luabind::scope lua_register_hate_entry() {
-
 	return luabind::class_<Lua_HateEntry>("HateEntry")
-			.property("null", &Lua_HateEntry::Null)
-			.property("valid", &Lua_HateEntry::Valid)
-			.property("ent", &Lua_HateEntry::GetEnt, &Lua_HateEntry::SetEnt)
-			.property("damage", &Lua_HateEntry::GetDamage, &Lua_HateEntry::SetDamage)
-			.property("hate", &Lua_HateEntry::GetHate, &Lua_HateEntry::SetHate)
-			.property("frenzy", &Lua_HateEntry::GetFrenzy, &Lua_HateEntry::SetFrenzy);
+	.property("null", &Lua_HateEntry::Null)
+	.property("valid", &Lua_HateEntry::Valid)
+	.property("damage", &Lua_HateEntry::GetDamage, &Lua_HateEntry::SetDamage)
+	.property("ent", &Lua_HateEntry::GetEnt, &Lua_HateEntry::SetEnt)
+	.property("frenzy", &Lua_HateEntry::GetFrenzy, &Lua_HateEntry::SetFrenzy)
+	.property("hate", &Lua_HateEntry::GetHate, &Lua_HateEntry::SetHate);
 }
 
 luabind::scope lua_register_hate_list() {
 	return luabind::class_<Lua_HateList>("HateList")
-			.def_readwrite("entries", &Lua_HateList::entries, luabind::return_stl_iterator);
+	.def_readwrite("entries", &Lua_HateList::entries, luabind::return_stl_iterator);
 }
 
-#endif
+#endif // LUA_EQEMU

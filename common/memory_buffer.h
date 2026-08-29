@@ -1,34 +1,31 @@
-/*	EQEMu: Everquest Server Emulator
-	
-	Copyright (C) 2001-2016 EQEMu Development Team (http://eqemulator.net)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
+#pragma once
 
-#ifndef COMMON_MEMORY_BUFFER
-#define COMMON_MEMORY_BUFFER
+#include "common/types.h"
 
-#include "types.h"
-
-#include <type_traits>
-#include <string.h>
-#include <string>
+#include <cstring>
 #include <sstream>
+#include <string>
+#include <type_traits>
 
 
-namespace EQEmu
+namespace EQ
 {
 	class MemoryBuffer {
 	public:
@@ -41,7 +38,7 @@ namespace EQEmu
 		MemoryBuffer& operator+=(const MemoryBuffer &rhs);
 		friend MemoryBuffer operator+(MemoryBuffer lhs, const MemoryBuffer& rhs) { return lhs += rhs; }
 		~MemoryBuffer();
-		
+
 		uchar& operator[](size_t pos);
 		const uchar& operator[](size_t pos) const;
 
@@ -64,20 +61,20 @@ namespace EQEmu
 		size_t Size() const;
 		size_t Capacity();
 		size_t Capacity() const;
-		
+
 		void Resize(size_t sz);
 		void Clear();
 		void Zero();
 
 		template<typename T>
 		void Write(T val) {
-			static_assert(std::is_pod<T>::value, "MemoryBuffer::Write<T>(T val) only works on pod and string types.");
+			static_assert(std::is_standard_layout<T>::value, "MemoryBuffer::Write<T>(T val) only works on pod and string types.");
 			Write((const char*)&val, sizeof(T));
 		}
 
 		template<typename T>
 		T Read() {
-			static_assert(std::is_pod<T>::value, "MemoryBuffer::Read<T>() only works on pod and string types.");
+			static_assert(std::is_standard_layout<T>::value, "MemoryBuffer::Read<T>() only works on pod and string types.");
 			T temp;
 			Read((uchar*)&temp, sizeof(T));
 			return temp;
@@ -102,7 +99,7 @@ namespace EQEmu
 			read_pos_ += len + 1;
 			return ret;
 		}
-	
+
 		void Write(const char *val, size_t len);
 		void Read(uchar *buf, size_t len);
 		void Read(char *str);
@@ -113,7 +110,7 @@ namespace EQEmu
 		inline size_t GetReadPosition() { return read_pos_; }
 		inline void SetReadPosition(size_t rp) { read_pos_ = rp; }
 		inline void ReadSkipBytes(size_t skip) { read_pos_ += skip; }
-		
+
 	private:
 		uchar *buffer_;
 		size_t size_;
@@ -124,11 +121,9 @@ namespace EQEmu
 
 	class OutBuffer : public std::stringstream {
 	public:
-		inline size_t size() { return tellp(); }
+		inline size_t size() { return static_cast<size_t>(tellp()); }
 		void overwrite(OutBuffer::pos_type position, const char *_Str, std::streamsize _Count);
 		uchar* detach();
 	};
 
 } /*EQEmu*/
-
-#endif /*COMMON_MEMORY_BUFFER*/

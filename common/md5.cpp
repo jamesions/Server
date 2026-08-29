@@ -1,3 +1,20 @@
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
+
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 /* md5.c -- An implementation of Ron Rivest's MD5 message-digest algorithm.
 * Written by Colin Plumb in 1993, no copyright is claimed. This code is in the
 * public domain; do with it what you wish. Equivalent code is available from
@@ -7,10 +24,13 @@
 * MD5Update as needed on buffers full of bytes, and then call MD5Final, which
 * will fill a supplied 16-byte array with the digest.
 */
-#include <string.h> /* for memcpy() */
-#include "../common/md5.h"
-#include "../common/string_util.h"
-#include "../common/seperator.h"
+
+#include "md5.h"
+
+#include "common/strings.h"
+#include "common/seperator.h"
+
+#include <cstring> /* for memcpy() */
 
 MD5::MD5() {
 	memset(pMD5, 0, 16);
@@ -194,7 +214,7 @@ void MD5::Final(uint8 digest[16], MD5Context *ctx) {
 
 /* The heart of the MD5 algorithm. */
 void MD5::Transform(uint32 hash[4], const uint32 input[16]) {
-	register uint32 a = hash[0], b = hash[1], c = hash[2], d = hash[3];
+	uint32 a = hash[0], b = hash[1], c = hash[2], d = hash[3];
 
 	MD5STEP(F1, a, b, c, d, input[ 0]+0xd76aa478, 7);
 	MD5STEP(F1, d, a, b, c, input[ 1]+0xe8c7b756, 12);

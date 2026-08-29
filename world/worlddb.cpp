@@ -1,316 +1,408 @@
-/*	EQEMu: Everquest Server Emulator
-	Copyright (C) 2001-2006 EQEMu Development Team (http://eqemulator.net)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
-
 #include "worlddb.h"
-#include "../common/string_util.h"
-#include "../common/eq_packet_structs.h"
-#include "../common/inventory_profile.h"
-#include "../common/rulesys.h"
-#include <iostream>
+
+#include "common/eq_packet_structs.h"
+#include "common/inventory_profile.h"
+#include "common/repositories/character_bind_repository.h"
+#include "common/repositories/character_data_repository.h"
+#include "common/repositories/character_instance_safereturns_repository.h"
+#include "common/repositories/character_material_repository.h"
+#include "common/repositories/criteria/content_filter_criteria.h"
+#include "common/repositories/inventory_repository.h"
+#include "common/repositories/start_zones_repository.h"
+#include "common/rulesys.h"
+#include "common/strings.h"
+#include "common/zone_store.h"
+#include "world/sof_char_create_data.h"
+
 #include <cstdlib>
 #include <vector>
-#include "sof_char_create_data.h"
 
 WorldDatabase database;
+WorldDatabase content_db;
 extern std::vector<RaceClassAllocation> character_create_allocations;
 extern std::vector<RaceClassCombos> character_create_race_class_combos;
 
-
-// the current stuff is at the bottom of this function
-void WorldDatabase::GetCharSelectInfo(uint32 accountID, EQApplicationPacket **outApp, uint32 clientVersionBit)
+void WorldDatabase::GetCharSelectInfo(uint32 account_id, EQApplicationPacket **out_app, uint32 client_version_bit)
 {
-	/* Set Character Creation Limit */
-	EQEmu::versions::ClientVersion client_version = EQEmu::versions::ConvertClientVersionBitToClientVersion(clientVersionBit);
-	size_t character_limit = EQEmu::constants::Lookup(client_version)->CharacterCreationLimit;
-	
-	// Validate against absolute server max
-	if (character_limit > EQEmu::constants::CharacterCreationMax)
-		character_limit = EQEmu::constants::CharacterCreationMax;
+	EQ::versions::ClientVersion
+		   client_version  = EQ::versions::ConvertClientVersionBitToClientVersion(client_version_bit);
+	size_t character_limit = EQ::constants::StaticLookup(client_version)->CharacterCreationLimit;
+
+	if (character_limit > EQ::constants::CHARACTER_CREATION_LIMIT) {
+		character_limit = EQ::constants::CHARACTER_CREATION_LIMIT;
+	}
 
 	// Force Titanium clients to use '8'
-	if (client_version == EQEmu::versions::ClientVersion::Titanium)
+	if (client_version == EQ::versions::ClientVersion::Titanium) {
 		character_limit = 8;
-	
-	/* Get Character Info */
-	std::string cquery = StringFormat(
-		"SELECT                     "
-		"`id`,                      "  // 0
-		"name,                      "  // 1
-		"gender,                    "  // 2
-		"race,                      "  // 3
-		"class,                     "  // 4
-		"`level`,                   "  // 5
-		"deity,                     "  // 6
-		"last_login,                "  // 7
-		"time_played,               "  // 8
-		"hair_color,                "  // 9
-		"beard_color,               "  // 10
-		"eye_color_1,               "  // 11
-		"eye_color_2,               "  // 12
-		"hair_style,                "  // 13
-		"beard,                     "  // 14
-		"face,                      "  // 15
-		"drakkin_heritage,          "  // 16
-		"drakkin_tattoo,            "  // 17
-		"drakkin_details,           "  // 18
-		"zone_id		            "  // 19
-		"FROM                       "
-		"character_data             "
-		"WHERE `account_id` = %i ORDER BY `name` LIMIT %u", accountID, character_limit);
-	auto results = database.QueryDatabase(cquery);
+	}
 
-	size_t character_count = results.RowCount();
-	if (character_count == 0) {
-		*outApp = new EQApplicationPacket(OP_SendCharInfo, sizeof(CharacterSelect_Struct));
-		CharacterSelect_Struct *cs = (CharacterSelect_Struct *)(*outApp)->pBuffer;
-		cs->CharCount = 0;
+	auto characters = CharacterDataRepository::GetWhere(
+		database,
+		fmt::format(
+			"`account_id` = {} AND `deleted_at` IS NULL ORDER BY `name` LIMIT {}",
+			account_id,
+			character_limit
+		)
+	);
+
+	size_t character_count = characters.size();
+	if (characters.empty()) {
+		*out_app = new EQApplicationPacket(OP_SendCharInfo, sizeof(CharacterSelect_Struct));
+		auto *cs = (CharacterSelect_Struct *) (*out_app)->pBuffer;
+		cs->CharCount  = 0;
 		cs->TotalChars = character_limit;
 		return;
 	}
 
+	std::vector<uint32_t> character_ids;
+	for (auto &e: characters) {
+		character_ids.push_back(e.id);
+	}
+
+	const auto& inventories = InventoryRepository::GetWhere(
+		*this,
+		fmt::format(
+			"`character_id` IN ({}) AND `slot_id` BETWEEN {} AND {}",
+			Strings::Join(character_ids, ","),
+			EQ::invslot::slotHead,
+			EQ::invslot::slotFeet
+		)
+	);
+
+	const auto& character_binds = CharacterBindRepository::GetWhere(
+		*this,
+		fmt::format(
+			"`id` IN ({}) ORDER BY id, slot",
+			Strings::Join(character_ids, ",")
+		)
+	);
+
+	const auto& character_materials = CharacterMaterialRepository::GetWhere(
+		*this,
+		fmt::format(
+			"`id` IN ({}) ORDER BY id, slot",
+			Strings::Join(character_ids, ",")
+		)
+	);
+
 	size_t packet_size = sizeof(CharacterSelect_Struct) + (sizeof(CharacterSelectEntry_Struct) * character_count);
-	*outApp = new EQApplicationPacket(OP_SendCharInfo, packet_size);
+	*out_app = new EQApplicationPacket(OP_SendCharInfo, packet_size);
 
-	unsigned char *buff_ptr = (*outApp)->pBuffer;
-	CharacterSelect_Struct *cs = (CharacterSelect_Struct *)buff_ptr;
+	unsigned char *buff_ptr = (*out_app)->pBuffer;
+	auto          *cs       = (CharacterSelect_Struct *) buff_ptr;
 
-	cs->CharCount = character_count;
+	cs->CharCount  = character_count;
 	cs->TotalChars = character_limit;
 
 	buff_ptr += sizeof(CharacterSelect_Struct);
-	for (auto row = results.begin(); row != results.end(); ++row) {
-		CharacterSelectEntry_Struct *cse = (CharacterSelectEntry_Struct *)buff_ptr;
+	for (auto &e: characters) {
+		auto                 *cse = (CharacterSelectEntry_Struct *) buff_ptr;
 		PlayerProfile_Struct pp;
-		EQEmu::InventoryProfile inv;
-		uint32 character_id = (uint32)atoi(row[0]);
-		uint8 has_home = 0;
-		uint8 has_bind = 0;
+		EQ::InventoryProfile inv;
+
+		pp.SetPlayerProfileVersion(EQ::versions::ConvertClientVersionToMobVersion(client_version));
+		inv.SetInventoryVersion(client_version);
+		inv.SetGMInventory(true); // charsel can not interact with items..but, no harm in setting to full expansion support
+
+		uint32 character_id = e.id;
+		uint8  has_home     = 0;
+		uint8  has_bind     = 0;
 
 		memset(&pp, 0, sizeof(PlayerProfile_Struct));
-		
-		/* Fill CharacterSelectEntry_Struct */
 		memset(cse->Name, 0, sizeof(cse->Name));
-		strcpy(cse->Name, row[1]);
-		cse->Class = (uint8)atoi(row[4]);
-		cse->Race = (uint32)atoi(row[3]);
-		cse->Level = (uint8)atoi(row[5]);
+		strcpy(cse->Name, e.name.c_str());
+		cse->Class       = e.class_;
+		cse->Race        = e.race;
+		cse->Level       = e.level;
 		cse->ShroudClass = cse->Class;
-		cse->ShroudRace = cse->Race;
-		cse->Zone = (uint16)atoi(row[19]);
-		cse->Instance = 0;
-		cse->Gender = (uint8)atoi(row[2]);
-		cse->Face = (uint8)atoi(row[15]);
+		cse->ShroudRace  = cse->Race;
+		cse->Zone        = e.zone_id;
+		cse->Instance    = 0;
+		cse->Gender      = e.gender;
+		cse->Face        = e.face;
 
-		for (uint32 matslot = 0; matslot < EQEmu::textures::materialCount; matslot++) {	// Processed below
-			cse->Equip[matslot].Material = 0;
-			cse->Equip[matslot].Unknown1 = 0;
-			cse->Equip[matslot].EliteModel = 0;
-			cse->Equip[matslot].HerosForgeModel = 0;
-			cse->Equip[matslot].Unknown2 = 0;
-			cse->Equip[matslot].Color = 0;
-		}						
+		for (auto &s: cse->Equip) {
+			s.Material        = 0;
+			s.Unknown1        = 0;
+			s.EliteModel      = 0;
+			s.HerosForgeModel = 0;
+			s.Unknown2        = 0;
+			s.Color           = 0;
+		}
 
-		cse->Unknown15 = 0xFF;
-		cse->Unknown19 = 0xFF;
-		cse->DrakkinTattoo = (uint32)atoi(row[17]);
-		cse->DrakkinDetails = (uint32)atoi(row[18]);
-		cse->Deity = (uint32)atoi(row[6]);
-		cse->PrimaryIDFile = 0;							// Processed Below
-		cse->SecondaryIDFile = 0;						// Processed Below
-		cse->HairColor = (uint8)atoi(row[9]);
-		cse->BeardColor = (uint8)atoi(row[10]);
-		cse->EyeColor1 = (uint8)atoi(row[11]);
-		cse->EyeColor2 = (uint8)atoi(row[12]);
-		cse->HairStyle = (uint8)atoi(row[13]);
-		cse->Beard = (uint8)atoi(row[14]);
-		cse->GoHome = 0;								// Processed Below
-		cse->Tutorial = 0;								// Processed Below
-		cse->DrakkinHeritage = (uint32)atoi(row[16]);
-		cse->Unknown1 = 0;
-		cse->Enabled = 1;
-		cse->LastLogin = (uint32)atoi(row[7]);			// RoF2 value: 1212696584
-		cse->Unknown2 = 0;
-		/* Fill End */
+		cse->Unknown15       = 0xFF;
+		cse->Unknown19       = 0xFF;
+		cse->DrakkinTattoo   = e.drakkin_tattoo;
+		cse->DrakkinDetails  = e.drakkin_details;
+		cse->Deity           = e.deity;
+		cse->PrimaryIDFile   = 0;                            // Processed Below
+		cse->SecondaryIDFile = 0;                        // Processed Below
+		cse->HairColor       = e.hair_color;
+		cse->BeardColor      = e.beard_color;
+		cse->EyeColor1       = e.eye_color_1;
+		cse->EyeColor2       = e.eye_color_2;
+		cse->HairStyle       = e.hair_style;
+		cse->Beard           = e.beard;
+		cse->GoHome          = 0;                                // Processed Below
+		cse->Tutorial        = 0;                                // Processed Below
+		cse->DrakkinHeritage = e.drakkin_heritage;
+		cse->Unknown1        = 0;
+		cse->Enabled         = 1;
+		cse->LastLogin       = e.last_login;            // RoF2 value: 1212696584
+		cse->Unknown2        = 0;
 
 		if (RuleB(World, EnableReturnHomeButton)) {
 			int now = time(nullptr);
-			if ((now - atoi(row[7])) >= RuleI(World, MinOfflineTimeToReturnHome))
+			if (now - e.last_login >= RuleI(World, MinOfflineTimeToReturnHome)) {
 				cse->GoHome = 1;
+			}
 		}
 
 		if (RuleB(World, EnableTutorialButton) && (cse->Level <= RuleI(World, MaxLevelForTutorial))) {
 			cse->Tutorial = 1;
 		}
 
-		/* Set Bind Point Data for any character that may possibly be missing it for any reason */
-		cquery = StringFormat("SELECT `zone_id`, `instance_id`, `x`, `y`, `z`, `heading`, `slot` FROM `character_bind`  WHERE `id` = %i LIMIT 5", character_id);
-		auto results_bind = database.QueryDatabase(cquery);
-		auto bind_count = results_bind.RowCount();
-		for (auto row_b = results_bind.begin(); row_b != results_bind.end(); ++row_b) {
-			if (row_b[6] && atoi(row_b[6]) == 4) {
-				has_home = 1;
-				// If our bind count is less than 5, we need to actually make use of this data so lets parse it
-				if (bind_count < 5) {
-					pp.binds[4].zoneId = atoi(row_b[0]);
-					pp.binds[4].instance_id = atoi(row_b[1]);
-					pp.binds[4].x = atof(row_b[2]);
-					pp.binds[4].y = atof(row_b[3]);
-					pp.binds[4].z = atof(row_b[4]);
-					pp.binds[4].heading = atof(row_b[5]);
-				}
+		// binds
+		int bind_count = 0;
+		for (auto &bind : character_binds) {
+			if (bind.id != e.id) {
+				continue;
 			}
-			if (row_b[6] && atoi(row_b[6]) == 0){ has_bind = 1; }
+
+			if (bind.slot == 4) {
+				has_home = 1;
+				pp.binds[4].zone_id     = bind.zone_id;
+				pp.binds[4].instance_id = bind.instance_id;
+				pp.binds[4].x           = bind.x;
+				pp.binds[4].y           = bind.y;
+				pp.binds[4].z           = bind.z;
+				pp.binds[4].heading     = bind.heading;
+			}
+
+			if (bind.slot == 0) {
+				has_bind = 1;
+			}
+
+			bind_count++;
 		}
 
 		if (has_home == 0 || has_bind == 0) {
-			cquery = StringFormat("SELECT `zone_id`, `bind_id`, `x`, `y`, `z` FROM `start_zones` WHERE `player_class` = %i AND `player_deity` = %i AND `player_race` = %i",
-				cse->Class, cse->Deity, cse->Race);
-			auto results_bind = database.QueryDatabase(cquery);
-			for (auto row_d = results_bind.begin(); row_d != results_bind.end(); ++row_d) {
-				/* If a bind_id is specified, make them start there */
-				if (atoi(row_d[1]) != 0) {
-					pp.binds[4].zoneId = (uint32)atoi(row_d[1]);
-					GetSafePoints(pp.binds[4].zoneId, 0, &pp.binds[4].x, &pp.binds[4].y, &pp.binds[4].z);
-				}
-				/* Otherwise, use the zone and coordinates given */
-				else {
-					pp.binds[4].zoneId = (uint32)atoi(row_d[0]);
-					float x = atof(row_d[2]);
-					float y = atof(row_d[3]);
-					float z = atof(row_d[4]);
-					if (x == 0 && y == 0 && z == 0){ GetSafePoints(pp.binds[4].zoneId, 0, &x, &y, &z); }
-					pp.binds[4].x = x; pp.binds[4].y = y; pp.binds[4].z = z;
+			const auto &start_zones = StartZonesRepository::GetWhere(
+				content_db,
+				fmt::format(
+					"`player_class` = {} AND `player_deity` = {} AND `player_race` = {} {}",
+					cse->Class,
+					cse->Deity,
+					cse->Race,
+					ContentFilterCriteria::apply().c_str()
+				)
+			);
+
+			if (!start_zones.empty()) {
+				pp.binds[4].zone_id = start_zones[0].zone_id;
+				pp.binds[4].x       = start_zones[0].x;
+				pp.binds[4].y       = start_zones[0].y;
+				pp.binds[4].z       = start_zones[0].z;
+				pp.binds[4].heading = start_zones[0].heading;
+
+				if (start_zones[0].bind_id != 0) {
+					pp.binds[4].zone_id = start_zones[0].bind_id;
+					auto z = GetZone(pp.binds[4].zone_id);
+					if (z) {
+						pp.binds[4].x       = z->safe_x;
+						pp.binds[4].y       = z->safe_y;
+						pp.binds[4].z       = z->safe_z;
+						pp.binds[4].heading = z->safe_heading;
+					}
+				} else {
+					pp.binds[4].zone_id = start_zones[0].zone_id;
+					pp.binds[4].x       = start_zones[0].x;
+					pp.binds[4].y       = start_zones[0].y;
+					pp.binds[4].z       = start_zones[0].z;
+					pp.binds[4].heading = start_zones[0].heading;
+
+					if (pp.binds[4].x == 0 && pp.binds[4].y == 0 && pp.binds[4].z == 0 && pp.binds[4].heading == 0) {
+						auto zone = GetZone(pp.binds[4].zone_id);
+						if (zone) {
+							pp.binds[4].x       = zone->safe_x;
+							pp.binds[4].y       = zone->safe_y;
+							pp.binds[4].z       = zone->safe_z;
+							pp.binds[4].heading = zone->safe_heading;
+						}
+					}
 				}
 			}
+			else {
+				LogError("No start zone found for class [{}] deity [{}] race [{}]", cse->Class, cse->Deity, cse->Race);
+			}
+
+
 			pp.binds[0] = pp.binds[4];
-			/* If no home bind set, set it */
+
+			// If we don't have home set, set it
 			if (has_home == 0) {
-				std::string query = StringFormat("REPLACE INTO `character_bind` (id, zone_id, instance_id, x, y, z, heading, slot)"
-					" VALUES (%u, %u, %u, %f, %f, %f, %f, %i)",
-					character_id, pp.binds[4].zoneId, 0, pp.binds[4].x, pp.binds[4].y, pp.binds[4].z, pp.binds[4].heading, 4);
-				auto results_bset = QueryDatabase(query);
+				auto bind = CharacterBindRepository::NewEntity();
+				bind.id          = character_id;
+				bind.zone_id     = pp.binds[4].zone_id;
+				bind.instance_id = 0;
+				bind.x           = pp.binds[4].x;
+				bind.y           = pp.binds[4].y;
+				bind.z           = pp.binds[4].z;
+				bind.heading     = pp.binds[4].heading;
+				bind.slot        = 4;
+				CharacterBindRepository::ReplaceOne(*this, bind);
 			}
-			/* If no regular bind set, set it */
+
+			// If we don't have regular bind set, set it
 			if (has_bind == 0) {
-				std::string query = StringFormat("REPLACE INTO `character_bind` (id, zone_id, instance_id, x, y, z, heading, slot)"
-					" VALUES (%u, %u, %u, %f, %f, %f, %f, %i)",
-					character_id, pp.binds[0].zoneId, 0, pp.binds[0].x, pp.binds[0].y, pp.binds[0].z, pp.binds[0].heading, 0);
-				auto results_bset = QueryDatabase(query);
+				auto bind = CharacterBindRepository::NewEntity();
+				bind.id          = character_id;
+				bind.zone_id     = pp.binds[0].zone_id;
+				bind.instance_id = 0;
+				bind.x           = pp.binds[0].x;
+				bind.y           = pp.binds[0].y;
+				bind.z           = pp.binds[0].z;
+				bind.heading     = pp.binds[0].heading;
+				bind.slot        = 0;
+				CharacterBindRepository::ReplaceOne(*this, bind);
 			}
 		}
-		/* If our bind count is less than 5, then we have null data that needs to be filled in. */
+
+		// If our bind count is less than 5, then we have null data that needs to be filled in
 		if (bind_count < 5) {
 			// we know that home and main bind must be valid here, so we don't check those
 			// we also use home to fill in the null data like live does.
-			for (int i = 1; i < 4;  i++) {
-				if (pp.binds[i].zoneId != 0) // we assume 0 is the only invalid one ...
+
+			std::vector<CharacterBindRepository::CharacterBind> binds;
+
+			for (int i = 1; i < 4; i++) {
+				if (pp.binds[i].zone_id != 0) { // we assume 0 is the only invalid one ...
 					continue;
+				}
 
-				std::string query = StringFormat("REPLACE INTO `character_bind` (id, zone_id, instance_id, x, y, z, heading, slot)"
-					" VALUES (%u, %u, %u, %f, %f, %f, %f, %i)",
-					character_id, pp.binds[4].zoneId, 0, pp.binds[4].x, pp.binds[4].y, pp.binds[4].z, pp.binds[4].heading, i);
-				auto results_bset = QueryDatabase(query);
+				auto bind = CharacterBindRepository::NewEntity();
+
+				bind.slot        = i;
+				bind.id          = character_id;
+				bind.zone_id     = pp.binds[4].zone_id;
+				bind.instance_id = 0;
+				bind.x           = pp.binds[4].x;
+				bind.y           = pp.binds[4].y;
+				bind.z           = pp.binds[4].z;
+				bind.heading     = pp.binds[4].heading;
+				binds.emplace_back(bind);
 			}
+
+			CharacterBindRepository::ReplaceMany(*this, binds);
 		}
-		/* Bind End */
 
-		/* Load Character Material Data for Char Select */
-		cquery = StringFormat("SELECT slot, red, green, blue, use_tint, color FROM `character_material` WHERE `id` = %u", character_id);
-		auto results_b = database.QueryDatabase(cquery); uint8 slot = 0;
-		for (auto row_b = results_b.begin(); row_b != results_b.end(); ++row_b) {
-			slot = atoi(row_b[0]);
-			pp.item_tint.Slot[slot].Red = atoi(row_b[1]);
-			pp.item_tint.Slot[slot].Green = atoi(row_b[2]);
-			pp.item_tint.Slot[slot].Blue = atoi(row_b[3]);
-			pp.item_tint.Slot[slot].UseTint = atoi(row_b[4]);
+		for (auto &cm : character_materials) {
+			pp.item_tint.Slot[cm.slot].Red     = cm.red;
+			pp.item_tint.Slot[cm.slot].Green   = cm.green;
+			pp.item_tint.Slot[cm.slot].Blue    = cm.blue;
+			pp.item_tint.Slot[cm.slot].UseTint = cm.use_tint;
+			pp.item_tint.Slot[cm.slot].Color   = cm.color;
 		}
-		/* Character Material Data End */
 
-		/* Load Inventory */
-		// If we ensure that the material data is updated appropriately, we can do away with inventory loads
-		if (GetInventory(accountID, cse->Name, &inv)) {
-			const EQEmu::ItemData* item = nullptr;
-			const EQEmu::ItemInstance* inst = nullptr;
-			int16 invslot = 0;
+		if (GetCharSelInventory(inventories, e, &inv)) {
+			const EQ::ItemData     *item          = nullptr;
+			const EQ::ItemInstance *inst          = nullptr;
+			int16                  inventory_slot = 0;
 
-			for (uint32 matslot = EQEmu::textures::textureBegin; matslot < EQEmu::textures::materialCount; matslot++) {
-				invslot = EQEmu::InventoryProfile::CalcSlotFromMaterial(matslot);
-				if (invslot == INVALID_INDEX) { continue; }
-				inst = inv.GetItem(invslot);
-				if (inst == nullptr) { continue; }
+			for (uint32 matslot = EQ::textures::textureBegin; matslot < EQ::textures::materialCount; matslot++) {
+				inventory_slot = EQ::InventoryProfile::CalcSlotFromMaterial(matslot);
+				if (inventory_slot == INVALID_INDEX) { continue; }
+				inst = inv.GetItem(inventory_slot);
+				if (inst == nullptr) {
+					continue;
+				}
+
 				item = inst->GetItem();
-				if (item == nullptr) { continue; }
+				if (item == nullptr) {
+					continue;
+				}
 
 				if (matslot > 6) {
-					uint32 idfile = 0;
-					// Weapon Models 
+					uint32 item_id_file = 0;
+					// Weapon Models
 					if (inst->GetOrnamentationIDFile() != 0) {
-						idfile = inst->GetOrnamentationIDFile();
-						cse->Equip[matslot].Material = idfile;
+						item_id_file = inst->GetOrnamentationIDFile();
+						cse->Equip[matslot].Material = item_id_file;
 					}
 					else {
 						if (strlen(item->IDFile) > 2) {
-							idfile = atoi(&item->IDFile[2]);
-							cse->Equip[matslot].Material = idfile;
+							item_id_file = Strings::ToInt(&item->IDFile[2]);
+							cse->Equip[matslot].Material = item_id_file;
 						}
 					}
-					if (matslot == EQEmu::textures::weaponPrimary) {
-						cse->PrimaryIDFile = idfile;
+
+					if (matslot == EQ::textures::weaponPrimary) {
+						cse->PrimaryIDFile = item_id_file;
 					}
 					else {
-						cse->SecondaryIDFile = idfile;
+						cse->SecondaryIDFile = item_id_file;
 					}
 				}
 				else {
-					uint32 color = 0;
-					if (pp.item_tint.Slot[matslot].UseTint) {
-						color = pp.item_tint.Slot[matslot].Color;
-					}
-					else {
-						color = inst->GetColor();
-					}
-
 					// Armor Materials/Models
-					cse->Equip[matslot].Material = item->Material;
-					cse->Equip[matslot].EliteModel = item->EliteMaterial;
+					uint32 color = (
+						pp.item_tint.Slot[matslot].UseTint ?
+							pp.item_tint.Slot[matslot].Color :
+							inst->GetColor()
+					);
+					cse->Equip[matslot].Material        = item->Material;
+					cse->Equip[matslot].EliteModel      = item->EliteMaterial;
 					cse->Equip[matslot].HerosForgeModel = inst->GetOrnamentHeroModel(matslot);
-					cse->Equip[matslot].Color = color;
+					cse->Equip[matslot].Color           = color;
 				}
 			}
 		}
 		else {
 			printf("Error loading inventory for %s\n", cse->Name);
 		}
-		/* Load Inventory End */
-
 		buff_ptr += sizeof(CharacterSelectEntry_Struct);
 	}
 }
 
-int WorldDatabase::MoveCharacterToBind(int CharID, uint8 bindnum)
+int WorldDatabase::MoveCharacterToBind(int character_id, uint8 bind_number)
 {
 	/*  if an invalid bind point is specified, use the primary bind */
-	if (bindnum > 4)
-	{
-		bindnum = 0;
-	}
+	if (bind_number > 4)
+		bind_number = 0;
 
-	std::string query = StringFormat("SELECT zone_id, instance_id, x, y, z FROM character_bind WHERE id = %u AND slot = %u LIMIT 1", CharID, bindnum);
+	std::string query = fmt::format(
+		SQL(
+			SELECT
+			zone_id, instance_id, x, y, z, heading
+			FROM
+			character_bind
+			WHERE
+			id = {}
+			AND
+			slot = {}
+			LIMIT 1
+		),
+		character_id,
+		bind_number
+	);
 	auto results = database.QueryDatabase(query);
 	if(!results.Success() || results.RowCount() == 0) {
 		return 0;
@@ -319,16 +411,35 @@ int WorldDatabase::MoveCharacterToBind(int CharID, uint8 bindnum)
 	int zone_id, instance_id;
 	double x, y, z, heading;
 	for (auto row = results.begin(); row != results.end(); ++row) {
-		zone_id = atoi(row[0]);
-		instance_id = atoi(row[1]);
-		x = atof(row[2]);
-		y = atof(row[3]);
-		z = atof(row[4]);
-		heading = atof(row[5]);
+		zone_id = Strings::ToInt(row[0]);
+		instance_id = Strings::ToInt(row[1]);
+		x = Strings::ToFloat(row[2]);
+		y = Strings::ToFloat(row[3]);
+		z = Strings::ToFloat(row[4]);
+		heading = Strings::ToFloat(row[5]);
 	}
 
-	query = StringFormat("UPDATE character_data SET zone_id = '%d', zone_instance = '%d', x = '%f', y = '%f', z = '%f', heading = '%f' WHERE id = %u", 
-						 zone_id, instance_id, x, y, z, heading, CharID);
+	query = fmt::format(
+		SQL(
+			UPDATE
+			`character_data`
+			SET
+			`zone_id` = {},
+			`zone_instance` = {},
+			`x` = {},
+			`y` = {},
+			`z` = {},
+			`heading` = {}
+			WHERE `id` = {}
+		),
+		zone_id,
+		instance_id,
+		x,
+		y,
+		z,
+		heading,
+		character_id
+	);
 
 	results = database.QueryDatabase(query);
 	if(!results.Success()) {
@@ -338,7 +449,59 @@ int WorldDatabase::MoveCharacterToBind(int CharID, uint8 bindnum)
 	return zone_id;
 }
 
-bool WorldDatabase::GetStartZone(PlayerProfile_Struct* in_pp, CharCreate_Struct* in_cc,bool isTitanium)
+int WorldDatabase::MoveCharacterToInstanceSafeReturn(
+	int character_id,
+	int instance_zone_id,
+	int instance_id
+)
+{
+	int zone_id = 0;
+
+	// only moves if safe return is for specified zone instance
+	auto entries = CharacterInstanceSafereturnsRepository::GetWhere(
+		database,
+		fmt::format(
+			"character_id = {} AND instance_zone_id = {} AND instance_id = {} AND safe_zone_id > 0",
+			character_id, instance_zone_id, instance_id
+		)
+	);
+
+	if (!entries.empty()) {
+		auto entry = entries.front();
+
+		auto results = QueryDatabase(
+			fmt::format(
+				SQL(
+					UPDATE character_data
+					SET zone_id = {}, zone_instance = 0, x = {}, y = {}, z = {}, heading = {}
+						WHERE id = {};
+				),
+				entry.safe_zone_id,
+				entry.safe_x,
+				entry.safe_y,
+				entry.safe_z,
+				entry.safe_heading,
+				character_id
+			)
+		);
+
+		if (results.Success() && results.RowsAffected() > 0) {
+			zone_id = entry.safe_zone_id;
+		}
+	}
+
+	if (zone_id == 0) {
+		zone_id = MoveCharacterToBind(character_id);
+	}
+
+	return zone_id;
+}
+
+bool WorldDatabase::GetStartZone(
+	PlayerProfile_Struct *pp,
+	CharCreate_Struct *p_char_create_struct,
+	bool is_titanium
+)
 {
 	// SoF doesn't send the player_choice field in character creation, it now sends the real zoneID instead.
 	//
@@ -347,156 +510,234 @@ bool WorldDatabase::GetStartZone(PlayerProfile_Struct* in_pp, CharCreate_Struct*
 	// For now, if no row matching row is found, send them to Crescent Reach, as that is probably the most likely
 	// reason for no match being found.
 	//
-	if(!in_pp || !in_cc)
+	if (!pp || !p_char_create_struct) {
 		return false;
+	}
 
-	in_pp->x = in_pp->y = in_pp->z = in_pp->heading = in_pp->zone_id = 0;
-	in_pp->binds[0].x = in_pp->binds[0].y = in_pp->binds[0].z = in_pp->binds[0].zoneId = in_pp->binds[0].instance_id = 0;
+	pp->x                    = 0;
+	pp->y                    = 0;
+	pp->z                    = 0;
+	pp->heading              = 0;
+	pp->zone_id              = 0;
+	pp->binds[0].x           = 0;
+	pp->binds[0].y           = 0;
+	pp->binds[0].z           = 0;
+	pp->binds[0].zone_id     = 0;
+	pp->binds[0].instance_id = 0;
+
 	// see if we have an entry for start_zone. We can support both titanium & SOF+ by having two entries per class/race/deity combo with different zone_ids
-	std::string query = StringFormat("SELECT x, y, z, heading, start_zone, bind_id, bind_x, bind_y, bind_z FROM start_zones WHERE zone_id = %i "
-		"AND player_class = %i AND player_deity = %i AND player_race = %i",
-		in_cc->start_zone, in_cc->class_, in_cc->deity, in_cc->race);
+	std::string query;
+
+	if (is_titanium) {
+		// Titanium sends player choice (starting city) instead of a zone id
+		query = StringFormat(
+			"SELECT x, y, z, heading, start_zone, bind_id, bind_x, bind_y, bind_z FROM start_zones WHERE player_choice = %i "
+			"AND player_class = %i AND player_deity = %i AND player_race = %i %s",
+			p_char_create_struct->start_zone,
+			p_char_create_struct->class_,
+			p_char_create_struct->deity,
+			p_char_create_struct->race,
+			ContentFilterCriteria::apply().c_str()
+		);
+		LogInfo("Titanium Start zone query: [{}]\n", query.c_str());
+	}
+	else {
+		query = StringFormat(
+			"SELECT x, y, z, heading, start_zone, bind_id, bind_x, bind_y, bind_z FROM start_zones WHERE zone_id = %i "
+			"AND player_class = %i AND player_deity = %i AND player_race = %i %s",
+			p_char_create_struct->start_zone,
+			p_char_create_struct->class_,
+			p_char_create_struct->deity,
+			p_char_create_struct->race,
+			ContentFilterCriteria::apply().c_str()
+		);
+		LogInfo("SoF Start zone query: [{}]\n", query.c_str());
+	}
+
     auto results = QueryDatabase(query);
 	if(!results.Success()) {
 		return false;
 	}
 
-	Log.Out(Logs::General, Logs::Status, "SoF Start zone query: %s\n", query.c_str());
+	LogInfo("SoF Start zone query: [{}]\n", query.c_str());
 
-    if (results.RowCount() == 0) {
-        printf("No start_zones entry in database, using defaults\n");
-		isTitanium ? SetTitaniumDefaultStartZone(in_pp, in_cc) : SetSoFDefaultStartZone(in_pp, in_cc);
+	if (results.RowCount() == 0) {
+		printf("No start_zones entry in database, using defaults\n");
+		is_titanium ? SetTitaniumDefaultStartZone(pp, p_char_create_struct) : SetSoFDefaultStartZone(pp, p_char_create_struct);
     }
     else {
-		Log.Out(Logs::General, Logs::Status, "Found starting location in start_zones");
+		LogInfo("Found starting location in start_zones");
 		auto row = results.begin();
-		in_pp->x = atof(row[0]);
-		in_pp->y = atof(row[1]);
-		in_pp->z = atof(row[2]);
-		in_pp->heading = atof(row[3]);
-		in_pp->zone_id = atoi(row[4]);
-		in_pp->binds[0].zoneId = atoi(row[5]);
-		in_pp->binds[0].x = atof(row[6]);
-		in_pp->binds[0].y = atof(row[7]);
-		in_pp->binds[0].z = atof(row[8]);
+		pp->x                = Strings::ToFloat(row[0]);
+		pp->y                = Strings::ToFloat(row[1]);
+		pp->z                = Strings::ToFloat(row[2]);
+		pp->heading          = Strings::ToFloat(row[3]);
+		pp->zone_id          = Strings::ToInt(row[4]);
+		pp->binds[0].zone_id = Strings::ToInt(row[5]);
+		pp->binds[0].x       = Strings::ToFloat(row[6]);
+		pp->binds[0].y       = Strings::ToFloat(row[7]);
+		pp->binds[0].z       = Strings::ToFloat(row[8]);
+		pp->binds[0].heading = Strings::ToFloat(row[3]);
 	}
 
-	if(in_pp->x == 0 && in_pp->y == 0 && in_pp->z == 0)
-		database.GetSafePoints(in_pp->zone_id, 0, &in_pp->x, &in_pp->y, &in_pp->z);
+	if (
+		pp->x == 0 &&
+		pp->y == 0 &&
+		pp->z == 0 &&
+		pp->heading == 0
+	) {
+		auto zone = GetZone(pp->zone_id);
+		if (zone) {
+			pp->x       = zone->safe_x;
+			pp->y       = zone->safe_y;
+			pp->z       = zone->safe_z;
+			pp->heading = zone->safe_heading;
+		}
+	}
 
-	if(in_pp->binds[0].x == 0 && in_pp->binds[0].y == 0 && in_pp->binds[0].z == 0)
-		database.GetSafePoints(in_pp->binds[0].zoneId, 0, &in_pp->binds[0].x, &in_pp->binds[0].y, &in_pp->binds[0].z);
+	if (
+		pp->binds[0].x == 0 &&
+		pp->binds[0].y == 0 &&
+		pp->binds[0].z == 0 &&
+		pp->binds[0].heading == 0
+	) {
+		auto zone = GetZone(pp->binds[0].zone_id);
+		if (zone) {
+			pp->binds[0].x       = zone->safe_x;
+			pp->binds[0].y       = zone->safe_y;
+			pp->binds[0].z       = zone->safe_z;
+			pp->binds[0].heading = zone->safe_heading;
+		}
+	}
 
 	return true;
 }
 
 void WorldDatabase::SetSoFDefaultStartZone(PlayerProfile_Struct* in_pp, CharCreate_Struct* in_cc){
-	if (in_cc->start_zone == RuleI(World, TutorialZoneID)) {
+	int sof_start_zone_id = RuleI(World, SoFStartZoneID);
+	if (sof_start_zone_id > 0) {
+			in_pp->zone_id = sof_start_zone_id;
+			in_cc->start_zone = in_pp->zone_id;
+	}
+	else if (in_cc->start_zone == RuleI(World, TutorialZoneID)) {
 		in_pp->zone_id = in_cc->start_zone;
-	} 
+	}
 	else {
-		in_pp->x = in_pp->binds[0].x = -51;
-		in_pp->y = in_pp->binds[0].y = -20;
-		in_pp->z = in_pp->binds[0].z = 0.79;
-		in_pp->zone_id = in_pp->binds[0].zoneId = 394; // Crescent Reach.
+		in_pp->x = in_pp->binds[0].x = -51.0f;
+		in_pp->y = in_pp->binds[0].y = -20.0f;
+		in_pp->z = in_pp->binds[0].z = 0.79f;
+		in_pp->heading = in_pp->binds[0].heading = 0.0f;
+		in_pp->zone_id = in_pp->binds[0].zone_id = Zones::CRESCENT; // Crescent Reach.
 	}
 }
 
 void WorldDatabase::SetTitaniumDefaultStartZone(PlayerProfile_Struct* in_pp, CharCreate_Struct* in_cc)
 {
-	switch (in_cc->start_zone)
-	{
-		case 0:
+	int titanium_start_zone_id = RuleI(World, TitaniumStartZoneID);
+	if (titanium_start_zone_id > 0) {
+		in_pp->zone_id = titanium_start_zone_id;
+		in_pp->binds[0].zone_id = titanium_start_zone_id;
+	} else {
+		switch (in_cc->start_zone)
 		{
-			if (in_cc->deity == 203) // Cazic-Thule Erudites go to Paineel
+			case StartZoneIndex::Odus:
 			{
-				in_pp->zone_id = 75; // paineel
-				in_pp->binds[0].zoneId = 75;
+				if (in_cc->deity == Deity::CazicThule) // Cazic-Thule Erudites go to Paineel
+				{
+					in_pp->zone_id = Zones::PAINEEL; // paineel
+					in_pp->binds[0].zone_id = Zones::PAINEEL;
+				}
+				else
+				{
+					in_pp->zone_id = Zones::ERUDNEXT;	// erudnext
+					in_pp->binds[0].zone_id = Zones::TOX;	// tox
+				}
+				break;
 			}
-			else
+			case StartZoneIndex::Qeynos:
 			{
-				in_pp->zone_id = 24;	// erudnext
-				in_pp->binds[0].zoneId = 38;	// tox
+				in_pp->zone_id = Zones::QEYNOS2;	// qeynos2
+				in_pp->binds[0].zone_id = Zones::QEYNOS2;	// qeynos2
+				break;
 			}
-			break;
-		}
-		case 1:
-		{
-			in_pp->zone_id = 2;	// qeynos2
-			in_pp->binds[0].zoneId = 2;	// qeynos2
-			break;
-		}
-		case 2:
-		{
-			in_pp->zone_id = 29;	// halas
-			in_pp->binds[0].zoneId = 30;	// everfrost
-			break;
-		}
-		case 3:
-		{
-			in_pp->zone_id = 19;	// rivervale
-			in_pp->binds[0].zoneId = 20;	// kithicor
-			break;
-		}
-		case 4:
-		{
-			in_pp->zone_id = 9;	// freportw
-			in_pp->binds[0].zoneId = 9;	// freportw
-			break;
-		}
-		case 5:
-		{
-			in_pp->zone_id = 40;	// neriaka
-			in_pp->binds[0].zoneId = 25;	// nektulos
-			break;
-		}
-		case 6:
-		{
-			in_pp->zone_id = 52;	// gukta
-			in_pp->binds[0].zoneId = 46;	// innothule
-			break;
-		}
-		case 7:
-		{
-			in_pp->zone_id = 49;	// oggok
-			in_pp->binds[0].zoneId = 47;	// feerrott
-			break;
-		}
-		case 8:
-		{
-			in_pp->zone_id = 60;	// kaladima
-			in_pp->binds[0].zoneId = 68;	// butcher
-			break;
-		}
-		case 9:
-		{
-			in_pp->zone_id = 54;	// gfaydark
-			in_pp->binds[0].zoneId = 54;	// gfaydark
-			break;
-		}
-		case 10:
-		{
-			in_pp->zone_id = 61;	// felwithea
-			in_pp->binds[0].zoneId = 54;	// gfaydark
-			break;
-		}
-		case 11:
-		{
-			in_pp->zone_id = 55;	// akanon
-			in_pp->binds[0].zoneId = 56;	// steamfont
-			break;
-		}
-		case 12:
-		{
-			in_pp->zone_id = 82;	// cabwest
-			in_pp->binds[0].zoneId = 78;	// fieldofbone
-			break;
-		}
-		case 13:
-		{
-			in_pp->zone_id = 155;	// sharvahl
-			in_pp->binds[0].zoneId = 155;	// sharvahl
-			break;
+			case StartZoneIndex::Halas:
+			{
+				in_pp->zone_id = Zones::HALAS;	// halas
+				in_pp->binds[0].zone_id = Zones::EVERFROST;	// everfrost
+				break;
+			}
+			case StartZoneIndex::Rivervale:
+			{
+				in_pp->zone_id = Zones::RIVERVALE;	// rivervale
+				in_pp->binds[0].zone_id = Zones::KITHICOR;	// kithicor
+				break;
+			}
+			case StartZoneIndex::Freeport:
+			{
+				in_pp->zone_id = Zones::FREPORTW;	// freportw
+				in_pp->binds[0].zone_id = Zones::FREPORTW;	// freportw
+				break;
+			}
+			case StartZoneIndex::Neriak:
+			{
+				in_pp->zone_id = Zones::NERIAKA;	// neriaka
+				in_pp->binds[0].zone_id = Zones::NEKTULOS;	// nektulos
+				break;
+			}
+			case StartZoneIndex::Grobb:
+			{
+				in_pp->zone_id = Zones::GROBB;	// grobb
+				in_pp->binds[0].zone_id = Zones::INNOTHULE;	// innothule
+				break;
+			}
+			case StartZoneIndex::Oggok:
+			{
+				in_pp->zone_id = Zones::OGGOK;	// oggok
+				in_pp->binds[0].zone_id = Zones::FEERROTT;	// feerrott
+				break;
+			}
+			case StartZoneIndex::Kaladim:
+			{
+				in_pp->zone_id = Zones::KALADIMA;	// kaladima
+				in_pp->binds[0].zone_id = Zones::BUTCHER;	// butcher
+				break;
+			}
+			case StartZoneIndex::GreaterFaydark:
+			{
+				in_pp->zone_id = Zones::GFAYDARK;	// gfaydark
+				in_pp->binds[0].zone_id = Zones::GFAYDARK;	// gfaydark
+				break;
+			}
+			case StartZoneIndex::Felwithe:
+			{
+				in_pp->zone_id = Zones::FELWITHEA;	// felwithea
+				in_pp->binds[0].zone_id = Zones::GFAYDARK;	// gfaydark
+				break;
+			}
+			case StartZoneIndex::Akanon:
+			{
+				in_pp->zone_id = Zones::AKANON;	// akanon
+				in_pp->binds[0].zone_id = Zones::STEAMFONT;	// steamfont
+				break;
+			}
+			case StartZoneIndex::Cabilis:
+			{
+				in_pp->zone_id = Zones::CABWEST;	// cabwest
+				in_pp->binds[0].zone_id = Zones::FIELDOFBONE;	// fieldofbone
+				break;
+			}
+			case StartZoneIndex::SharVahl:
+			{
+				in_pp->zone_id = Zones::SHARVAHL;	// sharvahl
+				in_pp->binds[0].zone_id = Zones::SHARVAHL;	// sharvahl
+				break;
+			}
+			case StartZoneIndex::RatheMtn:
+			{
+				in_pp->zone_id = Zones::RATHEMTN;	// rathemtn
+				in_pp->binds[0].zone_id = Zones::RATHEMTN;	// rathemtn
+				break;
+			}
 		}
 	}
 }
@@ -507,7 +748,7 @@ void WorldDatabase::GetLauncherList(std::vector<std::string> &rl) {
     const std::string query = "SELECT name FROM launcher";
     auto results = QueryDatabase(query);
     if (!results.Success()) {
-        Log.Out(Logs::General, Logs::Error, "WorldDatabase::GetLauncherList: %s", results.ErrorMessage().c_str());
+        LogError("WorldDatabase::GetLauncherList: {}", results.ErrorMessage().c_str());
         return;
     }
 
@@ -516,29 +757,12 @@ void WorldDatabase::GetLauncherList(std::vector<std::string> &rl) {
 
 }
 
-void WorldDatabase::SetMailKey(int CharID, int IPAddress, int MailKey)
-{
-	char MailKeyString[17];
-
-	if(RuleB(Chat, EnableMailKeyIPVerification) == true)
-		sprintf(MailKeyString, "%08X%08X", IPAddress, MailKey);
-	else
-		sprintf(MailKeyString, "%08X", MailKey);
-
-    std::string query = StringFormat("UPDATE character_data SET mailkey = '%s' WHERE id = '%i'",
-                                    MailKeyString, CharID);
-    auto results = QueryDatabase(query);
-	if (!results.Success())
-		Log.Out(Logs::General, Logs::Error, "WorldDatabase::SetMailKey(%i, %s) : %s", CharID, MailKeyString, results.ErrorMessage().c_str());
-
-}
-
 bool WorldDatabase::GetCharacterLevel(const char *name, int &level)
 {
 	std::string query = StringFormat("SELECT level FROM character_data WHERE name = '%s'", name);
 	auto results = QueryDatabase(query);
 	if (!results.Success()) {
-        Log.Out(Logs::General, Logs::Error, "WorldDatabase::GetCharacterLevel: %s", results.ErrorMessage().c_str());
+        LogError("WorldDatabase::GetCharacterLevel: {}", results.ErrorMessage().c_str());
         return false;
 	}
 
@@ -546,7 +770,7 @@ bool WorldDatabase::GetCharacterLevel(const char *name, int &level)
         return false;
 
     auto row = results.begin();
-    level = atoi(row[0]);
+    level = Strings::ToInt(row[0]);
 
     return true;
 }
@@ -562,21 +786,21 @@ bool WorldDatabase::LoadCharacterCreateAllocations()
 
     for (auto row = results.begin(); row != results.end(); ++row) {
         RaceClassAllocation allocate;
-		allocate.Index = atoi(row[0]);
-		allocate.BaseStats[0] = atoi(row[1]);
-		allocate.BaseStats[3] = atoi(row[2]);
-		allocate.BaseStats[1] = atoi(row[3]);
-		allocate.BaseStats[2] = atoi(row[4]);
-		allocate.BaseStats[4] = atoi(row[5]);
-		allocate.BaseStats[5] = atoi(row[6]);
-		allocate.BaseStats[6] = atoi(row[7]);
-		allocate.DefaultPointAllocation[0] = atoi(row[8]);
-		allocate.DefaultPointAllocation[3] = atoi(row[9]);
-		allocate.DefaultPointAllocation[1] = atoi(row[10]);
-		allocate.DefaultPointAllocation[2] = atoi(row[11]);
-		allocate.DefaultPointAllocation[4] = atoi(row[12]);
-		allocate.DefaultPointAllocation[5] = atoi(row[13]);
-		allocate.DefaultPointAllocation[6] = atoi(row[14]);
+		allocate.Index = Strings::ToInt(row[0]);
+		allocate.BaseStats[0] = Strings::ToInt(row[1]);
+		allocate.BaseStats[3] = Strings::ToInt(row[2]);
+		allocate.BaseStats[1] = Strings::ToInt(row[3]);
+		allocate.BaseStats[2] = Strings::ToInt(row[4]);
+		allocate.BaseStats[4] = Strings::ToInt(row[5]);
+		allocate.BaseStats[5] = Strings::ToInt(row[6]);
+		allocate.BaseStats[6] = Strings::ToInt(row[7]);
+		allocate.DefaultPointAllocation[0] = Strings::ToInt(row[8]);
+		allocate.DefaultPointAllocation[3] = Strings::ToInt(row[9]);
+		allocate.DefaultPointAllocation[1] = Strings::ToInt(row[10]);
+		allocate.DefaultPointAllocation[2] = Strings::ToInt(row[11]);
+		allocate.DefaultPointAllocation[4] = Strings::ToInt(row[12]);
+		allocate.DefaultPointAllocation[5] = Strings::ToInt(row[13]);
+		allocate.DefaultPointAllocation[6] = Strings::ToInt(row[14]);
 
 		character_create_allocations.push_back(allocate);
     }
@@ -595,14 +819,99 @@ bool WorldDatabase::LoadCharacterCreateCombos()
 
 	for (auto row = results.begin(); row != results.end(); ++row) {
 		RaceClassCombos combo;
-		combo.AllocationIndex = atoi(row[0]);
-		combo.Race = atoi(row[1]);
-		combo.Class = atoi(row[2]);
-		combo.Deity = atoi(row[3]);
-		combo.Zone = atoi(row[4]);
-		combo.ExpansionRequired = atoi(row[5]);
+		combo.AllocationIndex = Strings::ToInt(row[0]);
+		combo.Race = Strings::ToInt(row[1]);
+		combo.Class = Strings::ToInt(row[2]);
+		combo.Deity = Strings::ToInt(row[3]);
+		combo.Zone = Strings::ToInt(row[4]);
+		combo.ExpansionRequired = Strings::ToInt(row[5]);
 
 		character_create_race_class_combos.push_back(combo);
+	}
+
+	return true;
+}
+
+bool WorldDatabase::GetCharSelInventory(
+	const std::vector<InventoryRepository::Inventory> &inventories,
+	const CharacterDataRepository::CharacterData &character,
+	EQ::InventoryProfile *inv
+)
+{
+	if (inventories.empty() || !character.id || !inv) {
+		return false;
+	}
+
+	for (const auto& e : inventories) {
+		if (e.character_id != character.id) {
+			continue;
+		}
+
+		switch (e.slot_id) {
+			case EQ::invslot::slotFace:
+			case EQ::invslot::slotEar2:
+			case EQ::invslot::slotNeck:
+			case EQ::invslot::slotShoulders:
+			case EQ::invslot::slotBack:
+			case EQ::invslot::slotFinger1:
+			case EQ::invslot::slotFinger2:
+				continue;
+			default:
+				break;
+		}
+
+
+		uint32 augment_ids[EQ::invaug::SOCKET_COUNT] = {
+			e.augment_one,
+			e.augment_two,
+			e.augment_three,
+			e.augment_four,
+			e.augment_five,
+			e.augment_six
+		};
+
+		const EQ::ItemData* item = content_db.GetItem(e.item_id);
+		if (!item) {
+			continue;
+		}
+
+		EQ::ItemInstance *inst = content_db.CreateBaseItem(item, e.charges);
+
+		if (!inst) {
+			continue;
+		}
+
+		inst->SetCharges(e.charges);
+
+		if (e.color > 0) {
+			inst->SetColor(e.color);
+		}
+
+		if (item->IsClassCommon()) {
+			for (int i = EQ::invaug::SOCKET_BEGIN; i <= EQ::invaug::SOCKET_END; i++) {
+				if (augment_ids[i]) {
+					inst->PutAugment(this, i, augment_ids[i]);
+				}
+			}
+		}
+
+		inst->SetAttuned(e.instnodrop);
+
+		if (!e.custom_data.empty()) {
+			inst->SetCustomDataString(e.custom_data);
+		}
+
+		if (e.ornament_icon != 0 || e.ornament_idfile != 0 || e.ornament_hero_model != 0) {
+			inst->SetOrnamentIcon(e.ornament_icon);
+			inst->SetOrnamentationIDFile(e.ornament_idfile);
+			inst->SetOrnamentHeroModel(e.ornament_hero_model);
+		} else if (item->HerosForgeModel > 0) {
+			inst->SetOrnamentHeroModel(item->HerosForgeModel);
+		}
+
+		inv->PutItem(e.slot_id, *inst);
+
+		safe_delete(inst);
 	}
 
 	return true;

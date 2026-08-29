@@ -1,80 +1,42 @@
-/* EQEMu: Everquest Server Emulator
-	Copyright (C) 2001-2010 EQEMu Development Team (http://eqemulator.net)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
-#ifndef EQEMU_CLIENTMANAGER_H
-#define EQEMU_CLIENTMANAGER_H
+#pragma once
 
-#include "../common/global_define.h"
-#include "../common/opcodemgr.h"
-#include "../common/eq_stream_type.h"
-#include "../common/eq_stream_factory.h"
-#include "client.h"
+#include "common/net/eqstream.h"
+#include "loginserver/client.h"
+
 #include <list>
 
-using namespace std;
-
-/**
-* Client manager class, holds all the client objects and does basic processing.
-*/
-class ClientManager
-{
+class ClientManager {
 public:
-	/**
-	* Constructor, sets up the stream factories and opcode managers.
-	*/
 	ClientManager();
-
-	/**
-	* Destructor, shuts down the streams and opcode managers.
-	*/
 	~ClientManager();
-
-	/**
-	* Processes every client in the internal list, removes them if necessary.
-	*/
 	void Process();
-
-	/**
-	* Sends a new server list to every client.
-	*/
-	void UpdateServerList();
-
-	/**
-	* Removes a client with a certain account id.
-	*/
-	void RemoveExistingClient(unsigned int account_id);
-
-	/**
-	* Gets a client (if exists) by their account id.
-	*/
-	Client *GetClient(unsigned int account_id);
+	void RemoveExistingClient(unsigned int c, const std::string &loginserver);
+	Client *GetClient(unsigned int c, const std::string &loginserver);
 private:
-
-	/**
-	* Processes disconnected clients, removes them if necessary.
-	*/
 	void ProcessDisconnect();
 
-	list<Client*> clients;
-	OpcodeManager *titanium_ops;
-	EQStreamFactory *titanium_stream;
-	OpcodeManager *sod_ops;
-	EQStreamFactory *sod_stream;
+	std::list<Client *>      m_clients;
+	OpcodeManager            *m_titanium_ops;
+	EQ::Net::EQStreamManager *m_titanium_stream;
+	OpcodeManager            *m_sod_ops;
+	EQ::Net::EQStreamManager *m_sod_stream;
+	OpcodeManager            *m_larion_ops;
+	EQ::Net::EQStreamManager *m_larion_stream;
 };
-
-#endif
-

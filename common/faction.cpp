@@ -1,49 +1,50 @@
-/*	 EQEMu: Everquest Server Emulator
-	Copyright (C) 2001-2002 EQEMu Development Team (http://eqemu.org)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
-
 #include "faction.h"
-#include "races.h"
 
-const char *FactionValueToString(FACTION_VALUE fv)
+#include "common/races.h"
+#include "common/rulesys.h"
+
+const char *FactionValueToString(FACTION_VALUE faction_value)
 {
-	switch (fv) {
+	switch (faction_value) {
 		case FACTION_ALLY:
-			return ("Ally");
+			return "Ally";
 		case FACTION_WARMLY:
-			return ("Warmly");
+			return "Warmly";
 		case FACTION_KINDLY:
-			return ("Kindly");
-		case FACTION_AMIABLE:
-			return ("Amiable");
-		case FACTION_INDIFFERENT:
-			return ("Indifferent");
-		case FACTION_APPREHENSIVE:
-			return ("Apprehensive");
-		case FACTION_DUBIOUS:
-			return ("Dubious");
-		case FACTION_THREATENLY:
-			return ("Threatenly");
+			return "Kindly";
+		case FACTION_AMIABLY:
+			return "Amiably";
+		case FACTION_INDIFFERENTLY:
+			return "Indifferently";
+		case FACTION_APPREHENSIVELY:
+			return "Apprehensively";
+		case FACTION_DUBIOUSLY:
+			return "Dubiously";
+		case FACTION_THREATENINGLY:
+			return "Threateningly";
 		case FACTION_SCOWLS:
-			return ("Scowls, ready to attack.");
+			return "Scowls";
 		default:
 			break;
 	}
-	return ("Unknown Faction Con");
+	return "Unknown";
 }
 
 
@@ -59,34 +60,31 @@ FACTION_VALUE CalculateFaction(FactionMods* fm, int32 tmpCharacter_value)
 	if (fm) {
 		character_value += fm->base + fm->class_mod + fm->race_mod + fm->deity_mod;
 	}
-	if (character_value >= 1101) {
+	if (character_value >= RuleI(Faction, AllyFactionMinimum)) {
 		return FACTION_ALLY;
 	}
-	if (character_value >= 701 && character_value <= 1100) {
+	if (character_value >= RuleI(Faction, WarmlyFactionMinimum)) {
 		return FACTION_WARMLY;
 	}
-	if (character_value >= 401 && character_value <= 700) {
+	if (character_value >= RuleI(Faction, KindlyFactionMinimum)) {
 		return FACTION_KINDLY;
 	}
-	if (character_value >= 101 && character_value <= 400) {
-		return FACTION_AMIABLE;
+	if (character_value >= RuleI(Faction, AmiablyFactionMinimum)) {
+		return FACTION_AMIABLY;
 	}
-	if (character_value >= 0 && character_value <= 100) {
-		return FACTION_INDIFFERENT;
+	if (character_value >= RuleI(Faction, IndifferentlyFactionMinimum)) {
+		return FACTION_INDIFFERENTLY;
 	}
-	if (character_value >= -100 && character_value <= -1) {
-		return FACTION_APPREHENSIVE;
+	if (character_value >= RuleI(Faction, ApprehensivelyFactionMinimum)) {
+		return FACTION_APPREHENSIVELY;
 	}
-	if (character_value >= -700 && character_value <= -101) {
-		return FACTION_DUBIOUS;
+	if (character_value >= RuleI(Faction, DubiouslyFactionMinimum)) {
+		return FACTION_DUBIOUSLY;
 	}
-	if (character_value >= -999 && character_value <= -701) {
-		return FACTION_THREATENLY;
+	if (character_value >= RuleI(Faction, ThreateninglyFactionMinimum)) {
+		return FACTION_THREATENINGLY;
 	}
-	if (character_value <= -1000) {
-		return FACTION_SCOWLS;
-	}
-	return FACTION_INDIFFERENT;
+	return FACTION_SCOWLS;
 }
 
 // this function should check if some races have more than one race define
@@ -97,13 +95,13 @@ bool IsOfEqualRace(int r1, int r2)
 	}
 	// TODO: add more values
 	switch (r1) {
-		case DARK_ELF:
-			if (r2 == 77) {
+		case Race::DarkElf:
+			if (r2 == Race::NeriakCitizen) {
 				return true;
 			}
 			break;
-		case BARBARIAN:
-			if (r2 == 90) {
+		case Race::Barbarian:
+			if (r2 == Race::HalasCitizen) {
 				return true;
 			}
 	}
@@ -118,51 +116,50 @@ bool IsOfIndiffRace(int r1, int r2)
 	}
 	// TODO: add more values
 	switch (r1) {
-		case DARK_ELF:
-		case OGRE:
-		case TROLL:
-			if (r2 == OGRE || r2 == TROLL || r2 == DARK_ELF) {
+		case Race::DarkElf:
+		case Race::Ogre:
+		case Race::Troll:
+			if (r2 == Race::Ogre || r2 == Race::Troll || r2 == Race::DarkElf) {
 				return true;
 			}
 			break;
-		case HUMAN:
-		case BARBARIAN:
-		case HALF_ELF:
-		case GNOME:
-		case HALFLING:
-		case WOOD_ELF:
-			if (r2 == HUMAN ||
-			    r2 == BARBARIAN ||
-			    r2 == ERUDITE ||
-			    r2 == HALF_ELF ||
-			    r2 == GNOME ||
-			    r2 == HALFLING ||
-			    r2 == DWARF ||
-			    r2 == HIGH_ELF ||
-			    r2 == WOOD_ELF) {
+		case Race::Human:
+		case Race::Barbarian:
+		case Race::HalfElf:
+		case Race::Gnome:
+		case Race::Halfling:
+		case Race::WoodElf:
+			if (r2 == Race::Human ||
+			    r2 == Race::Barbarian ||
+			    r2 == Race::Erudite ||
+			    r2 == Race::HalfElf ||
+			    r2 == Race::Gnome ||
+			    r2 == Race::Halfling ||
+			    r2 == Race::Dwarf ||
+			    r2 == Race::HighElf ||
+			    r2 == Race::WoodElf) {
 				return true;
 			}
 			break;
-		case ERUDITE:
-			if (r2 == HUMAN || r2 == HALF_ELF) {
+		case Race::Erudite:
+			if (r2 == Race::Human || r2 == Race::HalfElf) {
 				return true;
 			}
 			break;
-		case DWARF:
-			if (r2 == HALFLING || r2 == GNOME) {
+		case Race::Dwarf:
+			if (r2 == Race::Halfling || r2 == Race::Gnome) {
 				return true;
 			}
 			break;
-		case HIGH_ELF:
-			if (r2 == WOOD_ELF) {
+		case Race::HighElf:
+			if (r2 == Race::WoodElf) {
 				return true;
 			}
 			break;
-		case VAHSHIR:
+		case Race::VahShir:
 			return true;
-		case IKSAR:
+		case Race::Iksar:
 			return false;
 	}
 	return false;
 }
-

@@ -1,93 +1,108 @@
-CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
+cmake_minimum_required(VERSION 3.20)
 
-SET(world_sources
-	adventure.cpp
-	adventure_manager.cpp
-	client.cpp
-	cliententry.cpp
-	clientlist.cpp
-	CMakeLists.txt
-	console.cpp
-	eql_config.cpp
-	eqw.cpp
-	eqw_http_handler.cpp
-	eqw_parser.cpp
-	http_request.cpp
-	launcher_link.cpp
-	launcher_list.cpp
-	lfplist.cpp
-	login_server.cpp
-	login_server_list.cpp
-	net.cpp
-	perl_eql_config.cpp
-	perl_eqw.cpp
-	perl_http_request.cpp
-	queryserv.cpp
-	ucs.cpp
-	wguild_mgr.cpp
-	world_config.cpp
-	worlddb.cpp
-	zonelist.cpp
-	zoneserver.cpp
+set(world_sources
+    adventure.cpp
+    adventure_manager.cpp
+    cli/cli_bots_disable.cpp
+    cli/cli_bots_enable.cpp
+    cli/cli_copy_character.cpp
+    cli/cli_database_concurrency.cpp
+    cli/cli_database_dump.cpp
+    cli/cli_database_get_schema.cpp
+    cli/cli_database_set_account_status.cpp
+    cli/cli_database_updates.cpp
+    cli/cli_database_version.cpp
+    cli/cli_etl_get_settings.cpp
+    cli/cli_mercs_disable.cpp
+    cli/cli_mercs_enable.cpp
+    cli/cli_test.cpp
+    cli/cli_test_colors.cpp
+    cli/cli_test_expansion.cpp
+    cli/cli_test_repository.cpp
+    cli/cli_test_repository_2.cpp
+    cli/cli_test_string_benchmark.cpp
+    cli/cli_version.cpp
+    client.cpp
+    cliententry.cpp
+    clientlist.cpp
+    console.cpp
+    dynamic_zone.cpp
+    dynamic_zone_manager.cpp
+    eqemu_api_world_data_service.cpp
+    eql_config.cpp
+    launcher_link.cpp
+    launcher_list.cpp
+    lfplist.cpp
+    login_server.cpp
+    login_server_list.cpp
+    main.cpp
+    queryserv.cpp
+    shared_task_manager.cpp
+    shared_task_world_messaging.cpp
+    ucs.cpp
+    web_interface.cpp
+    web_interface_eqw.cpp
+    wguild_mgr.cpp
+    world_boot.cpp
+    world_config.cpp
+    world_console_connection.cpp
+    world_event_scheduler.cpp
+    world_server_cli.cpp
+    worlddb.cpp
+    zonelist.cpp
+    zoneserver.cpp
 )
 
-SET(world_headers
-	adventure.h
-	adventure_manager.h
-	adventure_template.h
-	client.h
-	cliententry.h
-	clientlist.h
-	CMakeLists.txt
-	console.h
-	eql_config.h
-	eqw.h
-	eqw_http_handler.h
-	eqw_parser.h
-	http_request.h
-	launcher_link.h
-	launcher_list.h
-	lfplist.h
-	login_server.h
-	login_server_list.h
-	net.h
-	queryserv.h
-	sof_char_create_data.h
-	ucs.h
-	wguild_mgr.h
-	world_config.h
-	worlddb.h
-	world_tcp_connection.h
-	zonelist.h
-	zoneserver.h
+set(world_headers
+    adventure.h
+    adventure_manager.h
+    adventure_template.h
+    client.h
+    cliententry.h
+    clientlist.h
+    console.h
+    dynamic_zone.h
+    dynamic_zone_manager.h
+    eqemu_api_world_data_service.h
+    eql_config.h
+    launcher_link.h
+    launcher_list.h
+    lfplist.h
+    login_server.h
+    login_server_list.h
+    queryserv.h
+    shared_task_manager.h
+    shared_task_world_messaging.h
+    sof_char_create_data.h
+    ucs.h
+    web_interface.h
+    web_interface_eqw.h
+    wguild_mgr.h
+    world_boot.h
+    world_config.h
+    world_console_connection.h
+    world_event_scheduler.h
+    world_server_cli.h
+    world_tcp_connection.h
+    worlddb.h
+    zonelist.h
+    zoneserver.h
 )
 
-ADD_EXECUTABLE(world ${world_sources} ${world_headers})
+source_group("cli" REGULAR_EXPRESSION "cli/.*")
 
-INSTALL(TARGETS world RUNTIME DESTINATION ${CMAKE_INSTALL_PREFIX})
+add_executable(world ${world_sources} ${world_headers})
 
-ADD_DEFINITIONS(-DWORLD)
+target_compile_definitions(world PRIVATE WORLD)
 
-TARGET_LINK_LIBRARIES(world common ${PERL_LIBRARY} debug ${MySQL_LIBRARY_DEBUG} optimized ${MySQL_LIBRARY_RELEASE} ${ZLIB_LIBRARY})
+target_link_libraries(world common)
+target_include_directories(world PRIVATE ..)
 
-IF(MSVC)
-	SET_TARGET_PROPERTIES(world PROPERTIES LINK_FLAGS_RELEASE "/OPT:REF /OPT:ICF")
-	TARGET_LINK_LIBRARIES(world "Ws2_32.lib")
-ENDIF(MSVC)
+if(WIN32 AND EQEMU_BUILD_PCH)
+    target_precompile_headers(world PRIVATE ../common/pch/std-pch.h)
+endif()
 
-IF(MINGW)
-	TARGET_LINK_LIBRARIES(world "WS2_32")
-ENDIF(MINGW)
+install(TARGETS world RUNTIME DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
 
-IF(UNIX)
-	TARGET_LINK_LIBRARIES(world "${CMAKE_DL_LIBS}")
-	TARGET_LINK_LIBRARIES(world "z")
-	TARGET_LINK_LIBRARIES(world "m")
-	IF(NOT DARWIN)
-		TARGET_LINK_LIBRARIES(world "rt")
-	ENDIF(NOT DARWIN)
-	TARGET_LINK_LIBRARIES(world "pthread")
-	ADD_DEFINITIONS(-fPIC)
-ENDIF(UNIX)
-
-SET(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin)
+set(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin)
+set_property(TARGET world PROPERTY FOLDER executables/servers)

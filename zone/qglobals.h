@@ -1,5 +1,21 @@
-#ifndef __QGLOBALS__H
-#define __QGLOBALS__H
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
+
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
+*/
+#pragma once
 
 #include <list>
 
@@ -31,7 +47,6 @@ public:
 	//assumes cacheA is already a valid or empty list and doesn't check for valid items.
 	static void Combine(std::list<QGlobal> &cacheA, std::list<QGlobal> cacheB, uint32 npcID, uint32 charID, uint32 zoneID);
 	static void GetQGlobals(std::list<QGlobal> &globals, NPC *n, Client *c, Zone *z);
-	static bool GetQGlobal(QGlobal &g, std::string name, NPC *n, Client *c, Zone *z);
 
 	void PurgeExpiredGlobals();
 	void LoadByNPCID(uint32 npcID); //npc
@@ -42,5 +57,3 @@ protected:
 	void LoadBy(const std::string &query);
 	std::list<QGlobal> qGlobalBucket;
 };
-
-#endif

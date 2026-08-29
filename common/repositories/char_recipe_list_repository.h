@@ -1,0 +1,97 @@
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
+
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
+*/
+#pragma once
+
+#include "common/repositories/base/base_char_recipe_list_repository.h"
+
+#include "common/database.h"
+#include "common/strings.h"
+
+class CharRecipeListRepository: public BaseCharRecipeListRepository {
+public:
+
+    /**
+     * This file was auto generated and can be modified and extended upon
+     *
+     * Base repository methods are automatically
+     * generated in the "base" version of this repository. The base repository
+     * is immutable and to be left untouched, while methods in this class
+     * are used as extension methods for more specific persistence-layer
+     * accessors or mutators.
+     *
+     * Base Methods (Subject to be expanded upon in time)
+     *
+     * Note: Not all tables are designed appropriately to fit functionality with all base methods
+     *
+     * InsertOne
+     * UpdateOne
+     * DeleteOne
+     * FindOne
+     * GetWhere(std::string where_filter)
+     * DeleteWhere(std::string where_filter)
+     * InsertMany
+     * All
+     *
+     * Example custom methods in a repository
+     *
+     * CharRecipeListRepository::GetByZoneAndVersion(int zone_id, int zone_version)
+     * CharRecipeListRepository::GetWhereNeverExpires()
+     * CharRecipeListRepository::GetWhereXAndY()
+     * CharRecipeListRepository::DeleteWhereXAndY()
+     *
+     * Most of the above could be covered by base methods, but if you as a developer
+     * find yourself re-using logic for other parts of the code, its best to just make a
+     * method that can be re-used easily elsewhere especially if it can use a base repository
+     * method and encapsulate filters there
+     */
+
+	// Custom extended repository methods here
+
+	static CharRecipeList GetCharRecipeListEntry(
+		const std::vector<CharRecipeList> &recipe_list,
+		uint32 recipe_id
+	)
+	{
+		for (auto &e : recipe_list) {
+			if (e.recipe_id == recipe_id) {
+				return e;
+			}
+		}
+
+		return NewEntity();
+	}
+
+	// insert with ON DUPLICATE KEY UPDATE to leave rows that exist unchanged
+	static int InsertUpdateMany(Database& db, const std::vector<CharRecipeList>& entries)
+	{
+		std::vector<std::string> values;
+		values.reserve(entries.size());
+
+		for (const auto& e: entries)
+		{
+			values.emplace_back(fmt::format("({},{},{})", e.char_id, e.recipe_id, e.madecount));
+		}
+
+		auto results = db.QueryDatabase(fmt::format(
+			"INSERT INTO {0} (char_id, recipe_id, madecount) VALUES {1} ON DUPLICATE KEY UPDATE {2}={2}",
+			TableName(), fmt::join(values, ","), PrimaryKey()));
+
+		return results.Success() ? results.RowsAffected() : 0;
+	}
+
+};

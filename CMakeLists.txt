@@ -1,361 +1,187 @@
-#EQEmu CMake
-#Variables used:
-#EQEMU_DISABLE_CRT_SECURE_WARNINGS
-#EQEMU_FAST_FLOATINGPOINT
-#EQEMU_ENABLE_CRASH_LOGGING
-#EQEMU_DISABLE_SAFESEH
-#EQEMU_BUILD_MSVC_MP
-#EQEMU_DEBUG_LEVEL
-#EQEMU_LOG_LEVEL_STATUS
-#EQEMU_LOG_LEVEL_NORMAL
-#EQEMU_LOG_LEVEL_ERROR
-#EQEMU_LOG_LEVEL_DEBUG
-#EQEMU_LOG_LEVEL_QUEST
-#EQEMU_LOG_LEVEL_COMMANDS
-#EQEMU_LOG_LEVEL_CRASH
-#EQEMU_STREAM_SEND_RATE
-#EQEMU_STREAM_DECAY_RATE
-#EQEMU_STREAM_RETRANSMIT_TIMEOUT_MUL
-#EQEMU_STREAM_RETRANSMIT_TIMEOUT_MAX
-#EQEMU_STREAM_AVERAGE_DELTA_MAX
-#EQEMU_STREAM_RETRANSMIT_ACKED_PACKETS
-#EQEMU_DEPOP_INVALIDATES_CACHE
-#EQEMU_ENABLE_BOTS
-#EQEMU_DISABLE_LOGSYS
-#EQEMU_COMMANDS_LOGGING
-#EQEMU_BUILD_SERVER
-#EQEMU_BUILD_LOGIN
-#EQEMU_BUILD_TESTS
-#EQEMU_BUILD_PERL
-#EQEMU_BUILD_LUA
-#EQEMU_SANITIZE_LUA_LIBS
-#EQEMU_BUILD_CLIENT_FILES
-#EQEMU_USE_MAP_MMFS
-#EQEMU_MAP_DIR
+cmake_minimum_required(VERSION 3.20.0)
 
-#We set a fairly new version (as of 2013) because I found finding perl was a bit... buggy on older ones
-#Can change this if you really want but you should upgrade!
-CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
+set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/" ${CMAKE_MODULE_PATH})
 
-#FindMySQL is located here so lets make it so CMake can find it
-SET(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/" ${CMAKE_MODULE_PATH})
+if(NOT CMAKE_TOOLCHAIN_FILE)
+	if(DEFINED ENV{VCPKG_ROOT})
+		message(STATUS "Using vcpkg from VCPKG_ROOT")
+		set(CMAKE_TOOLCHAIN_FILE
+			"$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+			CACHE FILEPATH "Vcpkg toolchain file"
+		)
+	else()
+		message(STATUS "Using vcpkg submodule")
+		set(CMAKE_TOOLCHAIN_FILE
+			"${CMAKE_CURRENT_SOURCE_DIR}/submodules/vcpkg/scripts/buildsystems/vcpkg.cmake"
+			CACHE FILEPATH "Vcpkg toolchain file"
+		)
+	endif()
+endif()
 
-#Our project name is EQEmu
-PROJECT(EQEmu)
+project(EQEmu
+	VERSION 24.10.3
+	LANGUAGES CXX
+)
 
-#Default build type is set to RelWithDebInfo for generators that honor that like makefiles
-IF(NOT CMAKE_BUILD_TYPE)
-	SET(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Choose the type of build." FORCE)
-ENDIF(NOT CMAKE_BUILD_TYPE)
+set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
-#Add our various windows definitions
-IF(MSVC OR MINGW)
-	ADD_DEFINITIONS(-D_WINDOWS)
-	IF(CMAKE_CL_64)
-		ADD_DEFINITIONS(-DWIN64)
-	ELSE(CMAKE_CL_64)
-		ADD_DEFINITIONS(-DWIN32)
-	ENDIF(CMAKE_CL_64)
-ENDIF(MSVC OR MINGW)
+#explicitly set CMP0167 for Find Boost
+if(POLICY CMP0167)
+  cmake_policy(SET CMP0167 NEW)
+endif()
 
-IF(MSVC)
-	#Set our default locations for zlib/mysql based on x86/x64
-	IF(CMAKE_CL_64)
-		SET(ZLIB_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/zlib_x64")
-		SET(MYSQL_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/mysql_x64")
-		SET(LUA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/luaj_x64")
-	ELSE(CMAKE_CL_64)
-		SET(ZLIB_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/zlib_x86")
-		SET(MYSQL_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/mysql_x86")
-		SET(LUA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/luaj_x86")
-	ENDIF(CMAKE_CL_64)
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+	set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "Build type")
+endif()
 
-	#disable CRT warnings on windows cause they're annoying as shit and we use C functions everywhere
-	OPTION(EQEMU_DISABLE_CRT_SECURE_WARNINGS "Disable Secure CRT Warnings" ON)
-	IF(EQEMU_DISABLE_CRT_SECURE_WARNINGS)
-		ADD_DEFINITIONS(-D_CRT_SECURE_NO_WARNINGS)
-	ENDIF(EQEMU_DISABLE_CRT_SECURE_WARNINGS)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-	#fast FP if you'd like it
-	OPTION(EQEMU_FAST_FLOATINGPOINT "Use MSVC /fp:fast option" ON)
-	IF(EQEMU_FAST_FLOATINGPOINT)
-		ADD_DEFINITIONS(/fp:fast)
-	ENDIF(EQEMU_FAST_FLOATINGPOINT)
+option(EQEMU_BUILD_PCH "Build with precompiled headers (Windows)" ON)
 
-	#crash logging currently only works on windows x86/x64
-	OPTION(EQEMU_ENABLE_CRASH_LOGGING "Enable crash logging" ON)
-	IF(EQEMU_ENABLE_CRASH_LOGGING)
-		ADD_DEFINITIONS(-DCRASH_LOGGING)
-	ENDIF(EQEMU_ENABLE_CRASH_LOGGING)
+if(MSVC)
+	add_compile_options(/bigobj)
+	add_compile_definitions(_CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN CRASH_LOGGING)
+	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MP")
 
-	#Disable safe SEH or not?
-	OPTION(EQEMU_DISABLE_SAFESEH "Disable Safe SEH (Needed for Strawberry Perl)" OFF)
-	IF(EQEMU_DISABLE_SAFESEH)
-		SET(CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG} /SAFESEH:NO")
-		SET(CMAKE_EXE_LINKER_FLAGS_MINSIZEREL "${CMAKE_EXE_LINKER_FLAGS_MINSIZEREL} /SAFESEH:NO")
-		SET(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /SAFESEH:NO")
-		SET(CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO "${CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO} /SAFESEH:NO")
-		SET(CMAKE_SHARED_LINKER_FLAGS_DEBUG "${CMAKE_SHARED_LINKER_FLAGS_DEBUG} /SAFESEH:NO")
-		SET(CMAKE_SHARED_LINKER_FLAGS_MINSIZEREL "${CMAKE_SHARED_LINKER_FLAGS_MINSIZEREL} /SAFESEH:NO")
-		SET(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} /SAFESEH:NO")
-		SET(CMAKE_SHARED_LINKER_FLAGS_RELWITHDEBINFO "${CMAKE_SHARED_LINKER_FLAGS_RELWITHDEBINFO} /SAFESEH:NO")
-		SET(CMAKE_MODULE_LINKER_FLAGS_DEBUG "${CMAKE_MODULE_LINKER_FLAGS_DEBUG} /SAFESEH:NO")
-		SET(CMAKE_MODULE_LINKER_FLAGS_MINSIZEREL "${CMAKE_MODULE_LINKER_FLAGS_MINSIZEREL} /SAFESEH:NO")
-		SET(CMAKE_MODULE_LINKER_FLAGS_RELEASE "${CMAKE_MODULE_LINKER_FLAGS_RELEASE} /SAFESEH:NO")
-		SET(CMAKE_MODULE_LINKER_FLAGS_RELWITHDEBINFO "${CMAKE_MODULE_LINKER_FLAGS_RELWITHDEBINFO} /SAFESEH:NO")
-	ENDIF(EQEMU_DISABLE_SAFESEH)
+	option(EQEMU_DISABLE_MSVC_WARNINGS "Disable MSVC compile warnings." OFF)
+	if(EQEMU_DISABLE_MSVC_WARNINGS)
+		add_compile_options(/W0 /wd4005 /wd4996 /nologo /Os)
+	endif()
 
-	OPTION(EQEMU_BUILD_MSVC_MP "Enable build with multiple processes." ON)
-	IF(EQEMU_BUILD_MSVC_MP)
-		SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MP")
-	ENDIF(EQEMU_BUILD_MSVC_MP)
-
-	#We want to compile /MT not /MD so we change that
-	FOREACH(flag_var CMAKE_CXX_FLAGS_DEBUG CMAKE_CXX_FLAGS_MINSIZEREL CMAKE_CXX_FLAGS_RELEASE CMAKE_CXX_FLAGS_RELWITHDEBINFO CMAKE_C_FLAGS_DEBUG CMAKE_C_FLAGS_MINSIZEREL CMAKE_C_FLAGS_RELEASE CMAKE_C_FLAGS_RELWITHDEBINFO)
-		IF(${flag_var} MATCHES "/MD")
-			STRING(REGEX REPLACE "/MD" "/MT" ${flag_var} "${${flag_var}}")
-		ENDIF(${flag_var} MATCHES "/MD")
-	ENDFOREACH(flag_var)
-
-	ADD_DEFINITIONS(-DNOMINMAX)
-ELSE(MSVC)
-	#Normally set by perl but we don't use the perl flags anymore so we set it.
-	ADD_DEFINITIONS(-DHAS_UNION_SEMUN)
-ENDIF(MSVC)
+	option(EQEMU_MSVC_DEBUG_CRT "Use the debug CRT on MSVC debug builds" OFF)
+	if(EQEMU_MSVC_DEBUG_CRT)
+		add_compile_definitions(_CRT_DBG_MAP_ALLOC)
+	endif()
+else()
+	add_compile_definitions(HAS_UNION_SEMUN)
+endif()
 
 #FreeBSD support
-IF(UNIX)
-	IF(CMAKE_SYSTEM_NAME MATCHES "FreeBSD")
-		ADD_DEFINITIONS(-DFREEBSD)
-		ADD_DEFINITIONS(-D_GLIBCXX_USE_C99)
-		SET(FREEBSD TRUE)
-	ENDIF(CMAKE_SYSTEM_NAME MATCHES "FreeBSD")
-	IF(CMAKE_SYSTEM_NAME MATCHES "Darwin")
-		ADD_DEFINITIONS(-DDARWIN)
-		SET(DARWIN TRUE)
-	ENDIF(CMAKE_SYSTEM_NAME MATCHES "Darwin")
-ENDIF(UNIX)
+if(UNIX)
+	if(CMAKE_SYSTEM_NAME MATCHES "FreeBSD")
+		add_compile_definitions(FREEBSD)
+		add_compile_definitions(_GLIBCXX_USE_C99)
+		set(FREEBSD TRUE)
+	endif()
+	if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
+		add_compile_definitions(DARWIN)
+		set(DARWIN TRUE)
+	endif()
+endif()
 
-#debug level, 5 is default. Most people wont ever change this but it's there if you want to
-SET(EQEMU_DEBUG_LEVEL 5 CACHE STRING "EQEmu debug level:
-	0 - Quiet mode Errors to file Status and Normal ignored
-	1 - Status and Normal to console, Errors to logfile
-	2 - Status, Normal, and Error to console and logfile
-	3 - Light debug release errors and status
-	4 - Moderate debug release errors and status
-	5 - Maximum debug release errors and status
-	10 - More errors than you ever wanted to see"
-)
+find_package(Boost REQUIRED COMPONENTS dynamic_bitset foreach tuple)
+find_package(cereal CONFIG REQUIRED)
+find_package(fmt CONFIG REQUIRED)
+find_package(glm CONFIG REQUIRED)
+find_package(unofficial-libmariadb CONFIG REQUIRED)
+find_package(libuv CONFIG REQUIRED)
+find_package(OpenSSL REQUIRED)
+find_package(recastnavigation CONFIG REQUIRED)
+find_package(ZLIB REQUIRED)
+find_package(LuaJit REQUIRED)
+find_package(unofficial-sodium CONFIG REQUIRED)
+find_package(PerlLibs)
 
-SET(EQEMU_LOG_LEVEL_STATUS 2 CACHE STRING "EQEmu logging level for [Status]:
-	0 - Disabled
-	1 - Ouput to File Enabled
-	2 - Output to stdout Enabled
-	3 - Output to File and stdout Enabled
-	8 - Output to stderr Enabled
-	9 - Output to File and stderr Enabled
-	11 - Output to File, stdout and stderr Enabled"
-)
+message(STATUS "**************************************************")
+message(STATUS "* Library Detection                              *")
+message(STATUS "**************************************************")
 
-SET(EQEMU_LOG_LEVEL_NORMAL 3 CACHE STRING "EQEmu logging level for [Normal]:
-	0 - Disabled
-	1 - Ouput to File Enabled
-	2 - Output to stdout Enabled
-	3 - Output to File and stdout Enabled
-	8 - Output to stderr Enabled
-	9 - Output to File and stderr Enabled
-	11 - Output to File, stdout and stderr Enabled"
-)
+if(MARIADB_FOUND)
+	message(STATUS "* MariaDB:                                 FOUND *")
+else()
+	message(STATUS "* MariaDB:                               MISSING *")
+endif()
 
-SET(EQEMU_LOG_LEVEL_ERROR 2 CACHE STRING "EQEmu logging level for [Error]:
-	0 - Disabled
-	1 - Ouput to File Enabled
-	2 - Output to stdout Enabled
-	3 - Output to File and stdout Enabled
-	8 - Output to stderr Enabled
-	9 - Output to File and stderr Enabled
-	11 - Output to File, stdout and stderr Enabled"
-)
+if(ZLIB_FOUND)
+	message(STATUS "* ZLIB:                                    FOUND *")
+else()
+	message(STATUS "* ZLIB:                                  MISSING *")
+endif()
 
-SET(EQEMU_LOG_LEVEL_DEBUG 3 CACHE STRING "EQEmu logging level for [Debug]:
-	0 - Disabled
-	1 - Ouput to File Enabled
-	2 - Output to stdout Enabled
-	3 - Output to File and stdout Enabled
-	8 - Output to stderr Enabled
-	9 - Output to File and stderr Enabled
-	11 - Output to File, stdout and stderr Enabled"
-)
+if(LuaJit_FOUND)
+	message(STATUS "* LuaJIT:                                  FOUND *")
+else()
+	message(STATUS "* LuaJIT:                                MISSING *")
+endif()
 
-SET(EQEMU_LOG_LEVEL_QUEST 2 CACHE STRING "EQEmu logging level for [Quest]:
-	0 - Disabled
-	1 - Ouput to File Enabled
-	2 - Output to stdout Enabled
-	3 - Output to File and stdout Enabled
-	8 - Output to stderr Enabled
-	9 - Output to File and stderr Enabled
-	11 - Output to File, stdout and stderr Enabled"
-)
+if(PerlLibs_FOUND)
+	message(STATUS "* Perl:                                    FOUND *")
+else()
+	message(STATUS "* Perl:                                  MISSING *")
+endif()
 
-SET(EQEMU_LOG_LEVEL_COMMANDS 1 CACHE STRING "EQEmu logging level for [Commands]:
-	0 - Disabled
-	1 - Ouput to File Enabled
-	2 - Output to stdout Enabled
-	3 - Output to File and stdout Enabled
-	8 - Output to stderr Enabled
-	9 - Output to File and stderr Enabled
-	11 - Output to File, stdout and stderr Enabled"
-)
+if(OpenSSL_FOUND)
+	message(STATUS "* OpenSSL:                                 FOUND *")
+else()
+	message(STATUS "* OpenSSL:                               MISSING *")
+endif()
 
-SET(EQEMU_LOG_LEVEL_CRASH 3 CACHE STRING "EQEmu logging level for [Crash]:
-	0 - Disabled
-	1 - Ouput to File Enabled
-	2 - Output to stdout Enabled
-	3 - Output to File and stdout Enabled
-	8 - Output to stderr Enabled
-	9 - Output to File and stderr Enabled
-	11 - Output to File, stdout and stderr Enabled"
-)
+message(STATUS "PERL_INCLUDE_PATH: ${PERL_INCLUDE_PATH}")
+message(STATUS "PERL_LIBRARY: ${PERL_LIBRARY}")
+message(STATUS "PERL_INCLUDE_DIR: ${PERL_INCLUDE_DIR}")
+message(STATUS "PERL_INCLUDE_DIRS: ${PERL_INCLUDE_DIRS}")
+message(STATUS "PERL_LIBRARIES: ${PERL_LIBRARIES}")
+message(STATUS "PERL_VERSION: ${PERL_VERSION}")
+message(STATUS "**************************************************")
 
-MARK_AS_ADVANCED(EQEMU_LOG_LEVEL_STATUS EQEMU_LOG_LEVEL_NORMAL EQEMU_LOG_LEVEL_ERROR EQEMU_LOG_LEVEL_DEBUG EQEMU_LOG_LEVEL_QUEST EQEMU_LOG_LEVEL_COMMANDS EQEMU_LOG_LEVEL_CRASH)
+#options
+option(EQEMU_BUILD_SERVER "Build the game server." ON)
+option(EQEMU_BUILD_LOGIN "Build the login server." ON)
+option(EQEMU_BUILD_TESTS "Build utility tests." OFF)
+option(EQEMU_BUILD_CLIENT_FILES "Build Client Import/Export Data Programs." ON)
 
-SET(EQEMU_STREAM_SEND_RATE 1048576 CACHE STRING "Advanced: Base amount of data stream can send before throttle.")
-SET(EQEMU_STREAM_DECAY_RATE 78642 CACHE STRING "Advanced: Base amount of data stream recovers per tic.")
-SET(EQEMU_STREAM_RETRANSMIT_TIMEOUT_MUL 3.0 CACHE STRING "Advanced: Multiplier on retransmit timeout.")
-SET(EQEMU_STREAM_RETRANSMIT_TIMEOUT_MAX 5000 CACHE STRING "Advanced: Max in ms for retransmit timeout timer.")
-SET(EQEMU_STREAM_AVERAGE_DELTA_MAX 2500 CACHE STRING "Advanced: The maximum average delta in ms allowed.")
-SET(EQEMU_STREAM_RETRANSMIT_ACKED_PACKETS TRUE CACHE BOOL "Advanced: Whether or not acked packets can be retransmitted")
-MARK_AS_ADVANCED(EQEMU_STREAM_SEND_RATE EQEMU_STREAM_DECAY_RATE EQEMU_STREAM_RETRANSMIT_TIMEOUT_MUL EQEMU_STREAM_RETRANSMIT_TIMEOUT_MAX EQEMU_STREAM_AVERAGE_DELTA_MAX EQEMU_STREAM_RETRANSMIT_ACKED_PACKETS)
+if(PerlLibs_FOUND)
+	option(EQEMU_BUILD_PERL "Build Perl parser." ON)
 
-#NPC Types Cache Behavior
-OPTION(EQEMU_DEPOP_INVALIDATES_CACHE "#repop invalidates the npc_types cache (will cause a larger database hit on #repop but is more convienent)." ON)
+	if(EQEMU_BUILD_PERL)
+		set(PERL_LIBRARY_TYPE "    Perl")
+	else()
+		set(PERL_LIBRARY_TYPE " Missing")
+	endif()
+else()
+	set(PERL_LIBRARY_TYPE "Disabled")
+endif()
 
-#Bots are a compile time option so on/off
-OPTION(EQEMU_ENABLE_BOTS "Enable Bots" OFF)
+message(STATUS "")
+message(STATUS "**************************************************")
+message(STATUS "* Library Usage                                  *")
+message(STATUS "**************************************************")
+message(STATUS "* Database:                              MariaDB *")
+message(STATUS "* TLS:                                   OpenSSL *")
+message(STATUS "* Lua:                                    LuaJIT *")
+message(STATUS "* Perl:                                 ${PERL_LIBRARY_TYPE} *")
+message(STATUS "* zlib:                                     ZLIB *")
+message(STATUS "**************************************************")
 
-#Disable entire _mlog system (excludes trade/command logs)
-OPTION(EQEMU_DISABLE_LOGSYS "Disable Logging INI System" ON)
 
-#Enable GM Command log system
-OPTION(EQEMU_COMMANDS_LOGGING "Enable GM Command logs" ON)
+option(EQEMU_BUILD_LUA "Build Lua parser." ON)
 
-IF(EQEMU_COMMANDS_LOGGING)
-	ADD_DEFINITIONS(-DCOMMANDS_LOGGING)
-ENDIF(EQEMU_COMMANDS_LOGGING)
+if(EQEMU_BUILD_SERVER OR EQEMU_BUILD_LOGIN OR EQEMU_BUILD_TESTS OR EQEMU_BUILD_CLIENT_FILES)
+	add_subdirectory(common)
+	add_subdirectory(libs)
+else()
+	message(FATAL_ERROR "No targets were selected to build, we must build at least one target.")
+endif()
 
-IF(EQEMU_DISABLE_LOGSYS)
-	ADD_DEFINITIONS(-DDISABLE_LOGSYS)
-ENDIF(EQEMU_DISABLE_LOGSYS)
+if(EQEMU_BUILD_SERVER)
+	add_subdirectory(shared_memory)
+	add_subdirectory(world)
+	add_subdirectory(zone)
+	add_subdirectory(ucs)
+	add_subdirectory(queryserv)
+	add_subdirectory(eqlaunch)
+endif()
 
-IF(EQEMU_ENABLE_BOTS)
-	ADD_DEFINITIONS(-DBOTS)
-ENDIF(EQEMU_ENABLE_BOTS)
+if(EQEMU_BUILD_LOGIN)
+	add_subdirectory(loginserver)
+endif()
 
-#What to build
-OPTION(EQEMU_BUILD_SERVER "Build the game server." ON)
-OPTION(EQEMU_BUILD_LOGIN "Build the login server." OFF)
-OPTION(EQEMU_BUILD_TESTS "Build utility tests." OFF)
-OPTION(EQEMU_BUILD_PERL "Build Perl parser." ON)
-OPTION(EQEMU_BUILD_LUA "Build Lua parser." ON)
-OPTION(EQEMU_BUILD_CLIENT_FILES "Build Client Import/Export Data Programs." ON)
+if(EQEMU_BUILD_TESTS)
+	add_subdirectory(tests)
+endif()
 
-#C++11 stuff
-IF(NOT MSVC)
-	SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
-	IF("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
-		SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-reserved-user-defined-literal")
-	ENDIF()
-ENDIF(NOT MSVC)
-
-#Various definitions
-IF(EQEMU_BUILD_PERL)
-	ADD_DEFINITIONS(-DEMBPERL)
-	ADD_DEFINITIONS(-DEMBPERL_PLUGIN)
-ENDIF(EQEMU_BUILD_PERL)
-IF(EQEMU_BUILD_LUA)
-	ADD_DEFINITIONS(-DLUA_EQEMU)
-ENDIF(EQEMU_BUILD_LUA)
-
-OPTION(EQEMU_USE_MAP_MMFS "Create and use Zone Map MMF files." OFF)
-IF(EQEMU_USE_MAP_MMFS)
-	ADD_DEFINITIONS(-DUSE_MAP_MMFS)
-ENDIF(EQEMU_USE_MAP_MMFS)
-
-SET(EQEMU_MAP_DIR "./Maps" CACHE STRING "The dir that maps, water maps, and paths are located in.")
-
-ADD_DEFINITIONS(-DEQDEBUG=${EQEMU_DEBUG_LEVEL})
-ADD_DEFINITIONS(-DINVERSEXY)
-ADD_DEFINITIONS(-DFIELD_ITEMS)
-ADD_DEFINITIONS(-DMAP_DIR="${EQEMU_MAP_DIR}")
-ADD_DEFINITIONS(-DRATEBASE=${EQEMU_STREAM_SEND_RATE})
-ADD_DEFINITIONS(-DDECAYBASE=${EQEMU_STREAM_DECAY_RATE})
-ADD_DEFINITIONS(-DRETRANSMIT_TIMEOUT_MULT=${EQEMU_STREAM_RETRANSMIT_TIMEOUT_MUL})
-ADD_DEFINITIONS(-DRETRANSMIT_TIMEOUT_MAX=${EQEMU_STREAM_RETRANSMIT_TIMEOUT_MAX})
-ADD_DEFINITIONS(-DAVERAGE_DELTA_MAX=${EQEMU_STREAM_AVERAGE_DELTA_MAX})
-ADD_DEFINITIONS(-DLOG_LEVEL_STATUS=${EQEMU_LOG_LEVEL_STATUS})
-ADD_DEFINITIONS(-DLOG_LEVEL_NORMAL=${EQEMU_LOG_LEVEL_NORMAL})
-ADD_DEFINITIONS(-DLOG_LEVEL_ERROR=${EQEMU_LOG_LEVEL_ERROR})
-ADD_DEFINITIONS(-DLOG_LEVEL_DEBUG=${EQEMU_LOG_LEVEL_DEBUG})
-ADD_DEFINITIONS(-DLOG_LEVEL_QUEST=${EQEMU_LOG_LEVEL_QUEST})
-ADD_DEFINITIONS(-DLOG_LEVEL_COMMANDS=${EQEMU_LOG_LEVEL_COMMANDS})
-ADD_DEFINITIONS(-DLOG_LEVEL_CRASH=${EQEMU_LOG_LEVEL_CRASH})
-ADD_DEFINITIONS(-DGLM_FORCE_RADIANS)
-
-IF(EQEMU_STREAM_RETRANSMIT_ACKED_PACKETS)
-	ADD_DEFINITIONS(-DRETRANSMIT_ACKED_PACKETS=true)
-ELSE(EQEMU_STREAM_RETRANSMIT_ACKED_PACKETS)
-	ADD_DEFINITIONS(-DRETRANSMIT_ACKED_PACKETS=false)
-ENDIF(EQEMU_STREAM_RETRANSMIT_ACKED_PACKETS)
-
-#Find everything we need
-FIND_PACKAGE(ZLIB REQUIRED)
-FIND_PACKAGE(MySQL REQUIRED)
-IF(EQEMU_BUILD_PERL)
-	FIND_PACKAGE(PerlLibs REQUIRED)
-	INCLUDE_DIRECTORIES(SYSTEM "${PERL_INCLUDE_PATH}")
-ENDIF(EQEMU_BUILD_PERL)
-
-IF(EQEMU_BUILD_LUA)
-	FIND_PACKAGE(EQLua51 REQUIRED)
-	SET(Boost_USE_STATIC_LIBS OFF)
-	SET(Boost_USE_MULTITHREADED ON)
-	SET(Boost_USE_STATIC_RUNTIME OFF)
-	SET(BOOST_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/boost")
-
-	FIND_PACKAGE(Boost REQUIRED)
-	INCLUDE_DIRECTORIES(SYSTEM "${LUA_INCLUDE_DIR}" "${Boost_INCLUDE_DIRS}" "luabind")
-
-	OPTION(EQEMU_SANITIZE_LUA_LIBS "Sanitize Lua Libraries (Remove OS and IO standard libraries from being able to run)." ON)
-	IF(EQEMU_SANITIZE_LUA_LIBS)
-		ADD_DEFINITIONS(-DSANITIZE_LUA_LIBS)
-	ENDIF(EQEMU_SANITIZE_LUA_LIBS)
-ENDIF(EQEMU_BUILD_LUA)
-
-INCLUDE_DIRECTORIES(SYSTEM "${ZLIB_INCLUDE_DIRS}" "${MySQL_INCLUDE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/common/glm")
-
-IF(EQEMU_BUILD_LUA)
-    ADD_SUBDIRECTORY(luabind)
-ENDIF(EQEMU_BUILD_LUA)
-
-IF(EQEMU_BUILD_SERVER OR EQEMU_BUILD_LOGIN OR EQEMU_BUILD_TESTS)
-	ADD_SUBDIRECTORY(common)
-ENDIF(EQEMU_BUILD_SERVER OR EQEMU_BUILD_LOGIN OR EQEMU_BUILD_TESTS)
-IF(EQEMU_BUILD_SERVER)
-	ADD_SUBDIRECTORY(shared_memory)
-	ADD_SUBDIRECTORY(world)
-	ADD_SUBDIRECTORY(zone)
-	ADD_SUBDIRECTORY(ucs)
-	ADD_SUBDIRECTORY(queryserv)
-	ADD_SUBDIRECTORY(eqlaunch)
-ENDIF(EQEMU_BUILD_SERVER)
-IF(EQEMU_BUILD_LOGIN)
-	ADD_SUBDIRECTORY(loginserver)
-ENDIF(EQEMU_BUILD_LOGIN)
-
-IF(EQEMU_BUILD_TESTS)
-	ADD_SUBDIRECTORY(tests)
-ENDIF(EQEMU_BUILD_TESTS)
-
-IF(EQEMU_BUILD_CLIENT_FILES)
-	ADD_SUBDIRECTORY(client_files)
-ENDIF(EQEMU_BUILD_CLIENT_FILES)
+if(EQEMU_BUILD_CLIENT_FILES)
+	add_subdirectory(client_files)
+endif()

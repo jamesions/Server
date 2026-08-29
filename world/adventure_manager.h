@@ -1,11 +1,27 @@
-#ifndef ADVENTURE_MANAGER_H
-#define ADVENTURE_MANAGER_H
+/*	EQEmu: EQEmulator
 
-#include "../common/global_define.h"
-#include "../common/types.h"
-#include "../common/timer.h"
-#include "adventure.h"
-#include "adventure_template.h"
+	Copyright (C) 2001-2026 EQEmu Development Team
+
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
+*/
+#pragma once
+
+#include "common/timer.h"
+#include "common/types.h"
+#include "world/adventure_template.h"
+#include "world/adventure.h"
+
 #include <map>
 #include <list>
 
@@ -34,13 +50,18 @@ public:
 	void AddFinishedEvent(AdventureFinishEvent fe) { finished_list.push_back(fe); Save(); }
 	bool PopFinishedEvent(const char *name, AdventureFinishEvent &fe);
 	void Save();
-	void Load();
 
 	Adventure **GetFinishedAdventures(const char *player, int &count);
 	Adventure *GetActiveAdventure(const char *player);
 	AdventureTemplate *GetAdventureTemplate(int theme, int id);
 	AdventureTemplate *GetAdventureTemplate(int id);
 	void GetZoneData(uint16 instance_id);
+
+	static AdventureManager* Instance()
+	{
+		static AdventureManager instance;
+		return &instance;
+	}
 protected:
 	bool IsInExcludedZoneList(std::list<AdventureZones> excluded_zones, std::string zone_name, int version);
 	bool IsInExcludedZoneInList(std::list<AdventureZoneIn> excluded_zone_ins, int zone_id, int door_object);
@@ -89,5 +110,3 @@ protected:
 	Timer *save_timer;
 	Timer *leaderboard_info_timer;
 };
-
-#endif

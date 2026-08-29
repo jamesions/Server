@@ -1,26 +1,23 @@
-/*	EQEMu: Everquest Server Emulator
-	
-	Copyright (C) 2001-2016 EQEMu Development Team (http://eqemulator.net)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
+#pragma once
 
-#ifndef COMMON_UF_H
-#define COMMON_UF_H
-
-#include "../struct_strategy.h"
+#include "common/struct_strategy.h"
 
 class EQStreamIdentifier;
 
@@ -43,31 +40,11 @@ namespace UF
 	protected:
 
 		virtual std::string Describe() const;
-		virtual const EQEmu::versions::ClientVersion ClientVersion() const;
+		virtual const EQ::versions::ClientVersion ClientVersion() const;
 
 		//magic macro to declare our opcode processors
 		#include "ss_declare.h"
 		#include "uf_ops.h"
 	};
 
-	enum class CastingSlot : uint32 {
-		Gem1       = 0,
-		Gem2       = 1,
-		Gem3       = 2,
-		Gem4       = 3,
-		Gem5       = 4,
-		Gem6       = 5,
-		Gem7       = 6,
-		Gem8       = 7,
-		Gem9       = 8,
-		Gem10      = 9,
-		Gem11      = 10,
-		Gem12      = 11,
-		Item       = 12,
-		Discipline = 13,
-		AltAbility = 0xFF
-	};
-
 }; /*UF*/
-
-#endif /*COMMON_UF_H*/

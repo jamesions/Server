@@ -1,19 +1,40 @@
-#ifndef EQEMU_LUA_NPC_H
-#define EQEMU_LUA_NPC_H
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
+
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
+*/
+#pragma once
+
 #ifdef LUA_EQEMU
 
-#include "lua_mob.h"
+#include "zone/lua_mob.h"
 
 class NPC;
 class Lua_Mob;
 class Lua_NPC;
 class Lua_Client;
+struct Lua_NPC_Loot_List;
+class Lua_Inventory;
+class Lua_Spawn;
 
 namespace luabind {
 	struct scope;
 }
 
 luabind::scope lua_register_npc();
+luabind::scope lua_register_npc_loot_list();
 
 class Lua_NPC : public Lua_Mob
 {
@@ -27,7 +48,7 @@ public:
 		return reinterpret_cast<NPC*>(GetLuaPtrData());
 	}
 
-	void Signal(int id);
+	void Signal(int signal_id);
 	int CheckNPCFactionAlly(int faction);
 	void AddItem(int item_id, int charges);
 	void AddItem(int item_id, int charges, bool equip);
@@ -42,9 +63,9 @@ public:
 	void RemoveItem(int item_id);
 	void RemoveItem(int item_id, int quantity);
 	void RemoveItem(int item_id, int quantity, int slot);
-	void ClearItemList();
-	void AddCash(int copper, int silver, int gold, int platinum);
-	void RemoveCash();
+	void ClearLootItems();
+	void AddLootCash(uint32 copper, uint32 silver, uint32 gold, uint32 platinum);
+	void RemoveLootCash();
 	int CountLoot();
 	int GetLoottableID();
 	uint32 GetCopper();
@@ -63,7 +84,7 @@ public:
 	uint32 GetSp2();
 	int GetNPCFactionID();
 	int GetPrimaryFaction();
-	int GetNPCHate(Lua_Mob ent);
+	int64 GetNPCHate(Lua_Mob ent);
 	bool IsOnHatelist(Lua_Mob ent);
 	void SetNPCFactionID(int id);
 	uint32 GetMaxDMG();
@@ -73,11 +94,12 @@ public:
 	void SetPetSpellID(int id);
 	uint32 GetMaxDamage(int level);
 	void SetTaunting(bool t);
+	bool IsTaunting();
 	void PickPocket(Lua_Client thief);
 	void StartSwarmTimer(uint32 duration);
 	void DoClassAttacks(Lua_Mob target);
 	int GetMaxWp();
-	void DisplayWaypointInfo(Lua_Client to);
+	void DisplayWaypointInfo(Lua_Client client);
 	void CalculateNewWaypoint();
 	void AssignWaypoints(int grid);
 	void SetWaypointPause();
@@ -89,10 +111,17 @@ public:
 	void NextGuardPosition();
 	void SaveGuardSpot();
 	void SaveGuardSpot(bool clear);
+	void SaveGuardSpot(float x, float y, float z, float heading);
 	bool IsGuarding();
 	void AI_SetRoambox(float dist, float max_x, float min_x, float max_y, float min_y);
 	void AI_SetRoambox(float dist, float max_x, float min_x, float max_y, float min_y, uint32 delay, uint32 mindelay);
-	int GetNPCSpellsID();
+	void SetFollowID(int id);
+	void SetFollowDistance(int dist);
+	void SetFollowCanRun(bool v);
+	int GetFollowID();
+	int GetFollowDistance();
+	bool GetFollowCanRun();
+	uint32 GetNPCSpellsID();
 	int GetSpawnPointID();
 	float GetSpawnPointX();
 	float GetSpawnPointY();
@@ -108,8 +137,9 @@ public:
 	int GetSwarmOwner();
 	int GetSwarmTarget();
 	void SetSwarmTarget(int target);
-	void ModifyNPCStat(const char *stat, const char *value);
+	void ModifyNPCStat(std::string stat, std::string value);
 	void AddAISpell(int priority, int spell_id, int type, int mana_cost, int recast_delay, int resist_adjust);
+	void AddAISpell(int priority, int spell_id, int type, int mana_cost, int recast_delay, int resist_adjust, int min_hp, int max_hp);
 	void RemoveAISpell(int spell_id);
 	void SetSpellFocusDMG(int focus);
 	void SetSpellFocusHeal(int focus);
@@ -123,9 +153,72 @@ public:
 	int GetScore();
 	void MerchantOpenShop();
 	void MerchantCloseShop();
-	void SetMerchantProbability(uint8 amt);
-	uint8 GetMerchantProbability();
+	int GetRawAC();
+	int GetAvoidanceRating();
+	void SetSimpleRoamBox(float box_size);
+	void SetSimpleRoamBox(float box_size, float move_distance);
+	void SetSimpleRoamBox(float box_size, float move_distance, int move_delay);
+	void RecalculateSkills();
+	void ReloadSpells();
+	bool IsRaidTarget();
+	bool IsRareSpawn();
+	void ChangeLastName(std::string last_name);
+	void ClearLastName();
+	bool HasItem(uint32 item_id);
+	uint32 CountItem(uint32 item_id);
+	uint32 GetLootItemIDBySlot(uint16 loot_slot);
+	uint16 GetFirstLootSlotByItemID(uint32 item_id);
+	float GetHealScale();
+	float GetSpellScale();
+	Lua_NPC_Loot_List GetLootList(lua_State* L);
+	void AddAISpellEffect(int spell_effect_id, int base_value, int limit_value, int max_value);
+	void RemoveAISpellEffect(int spell_effect_id);
+	bool HasAISpellEffect(int spell_effect_id);
+	float GetNPCStat(std::string stat);
+	void SendPayload(int payload_id);
+	void SendPayload(int payload_id, std::string payload_value);
+	bool GetKeepsSoldItems();
+	void SetKeepsSoldItems(bool keeps_sold_items);
+	bool IsLDoNTrapped();
+	void SetLDoNTrapped(bool is_trapped);
+	uint8 GetLDoNTrapType();
+	void SetLDoNTrapType(uint8 trap_type);
+	uint16 GetLDoNTrapSpellID();
+	void SetLDoNTrapSpellID(uint16 spell_id);
+	bool IsLDoNLocked();
+	void SetLDoNLocked(bool is_locked);
+	uint16 GetLDoNLockedSkill();
+	void SetLDoNLockedSkill(uint16 skill_value);
+	bool IsLDoNTrapDetected();
+	void SetLDoNTrapDetected(bool is_detected);
+	void ScaleNPC(uint8 npc_level);
+	void ScaleNPC(uint8 npc_level, bool override_special_abilities);
+	bool IsUnderwaterOnly();
+	bool HasSpecialAbilities();
+	void DeleteBucket(std::string bucket_name);
+	std::string GetBucket(std::string bucket_name);
+	std::string GetBucketExpires(std::string bucket_name);
+	std::string GetBucketRemaining(std::string bucket_name);
+	void SetBucket(std::string bucket_name, std::string bucket_value);
+	void SetBucket(std::string bucket_name, std::string bucket_value, std::string expiration);
+	bool GetNPCAggro();
+	void SetNPCAggro(bool in_npc_aggro);
+	uint32 GetNPCSpellsEffectsID();
+	void DescribeSpecialAbilities(Lua_Client c);
+	bool IsMultiQuestEnabled();
+	void MultiQuestEnable();
+	bool LuaCheckHandin(
+		Lua_Client c,
+		luabind::adl::object handin_table,
+		luabind::adl::object required_table,
+		luabind::adl::object items_table
+	);
+	void ReturnHandinItems(Lua_Client c);
+	Lua_Spawn GetSpawn(lua_State* L);
+	bool IsResumedFromZoneSuspend();
+	void SetNPCTintIndex(uint32 id);
+	uint32 GetNPCTintIndex();
+
 };
 
-#endif
-#endif
+#endif // LUA_EQEMU

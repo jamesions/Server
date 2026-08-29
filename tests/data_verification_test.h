@@ -1,26 +1,24 @@
-/*	EQEMu: Everquest Server Emulator
-	Copyright (C) 2001-2014 EQEMu Development Team (http://eqemulator.net)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
+#pragma once
 
-#ifndef __EQEMU_TESTS_DATA_VERIFICATION_H
-#define __EQEMU_TESTS_DATA_VERIFICATION_H
-
+#include "common/data_verification.h"
 #include "cppunit/cpptest.h"
-#include "../common/data_verification.h"
 
 class DataVerificationTest : public Test::Suite {
 	typedef void(DataVerificationTest::*TestFunction)(void);
@@ -40,13 +38,13 @@ public:
 		float value_f = 500.0f;
 		int value_i = 500;
 		
-		float vf1 = EQEmu::Clamp(value_f, 0.0f, 1000.0f);
-		float vf2 = EQEmu::Clamp(value_f, 0.0f, 250.0f);
-		float vf3 = EQEmu::Clamp(value_f, 750.0f, 1000.0f);
+		float vf1 = EQ::Clamp(value_f, 0.0f, 1000.0f);
+		float vf2 = EQ::Clamp(value_f, 0.0f, 250.0f);
+		float vf3 = EQ::Clamp(value_f, 750.0f, 1000.0f);
 		
-		int vi1 = EQEmu::Clamp(value_i, 0, 1000);
-		int vi2 = EQEmu::Clamp(value_i, 0, 250);
-		int vi3 = EQEmu::Clamp(value_i, 750, 1000);
+		int vi1 = EQ::Clamp(value_i, 0, 1000);
+		int vi2 = EQ::Clamp(value_i, 0, 250);
+		int vi3 = EQ::Clamp(value_i, 750, 1000);
 		
 		TEST_ASSERT_EQUALS(vf1, 500.0f);
 		TEST_ASSERT_EQUALS(vf2, 250.0f);
@@ -61,11 +59,11 @@ public:
 		float value_f = 500.0f;
 		int value_i = 500;
 
-		float vf1 = EQEmu::ClampUpper(value_f, 1000.0f);
-		float vf2 = EQEmu::ClampUpper(value_f, 250.0f);
+		float vf1 = EQ::ClampUpper(value_f, 1000.0f);
+		float vf2 = EQ::ClampUpper(value_f, 250.0f);
 
-		int vi1 = EQEmu::ClampUpper(value_i, 1000);
-		int vi2 = EQEmu::ClampUpper(value_i, 250);
+		int vi1 = EQ::ClampUpper(value_i, 1000);
+		int vi2 = EQ::ClampUpper(value_i, 250);
 
 		TEST_ASSERT_EQUALS(vf1, 500.0f);
 		TEST_ASSERT_EQUALS(vf2, 250.0f);
@@ -78,11 +76,11 @@ public:
 		float value_f = 500.0f;
 		int value_i = 500;
 
-		float vf1 = EQEmu::ClampLower(value_f, 0.0f);
-		float vf2 = EQEmu::ClampLower(value_f, 750.0f);
+		float vf1 = EQ::ClampLower(value_f, 0.0f);
+		float vf2 = EQ::ClampLower(value_f, 750.0f);
 
-		int vi1 = EQEmu::ClampLower(value_i, 0);
-		int vi2 = EQEmu::ClampLower(value_i, 750);
+		int vi1 = EQ::ClampLower(value_i, 0);
+		int vi2 = EQ::ClampLower(value_i, 750);
 
 		TEST_ASSERT_EQUALS(vf1, 500.0f);
 		TEST_ASSERT_EQUALS(vf2, 750.0f);
@@ -95,14 +93,12 @@ public:
 		float value_f = 500.0f;
 		int value_i = 500;
 
-		TEST_ASSERT(EQEmu::ValueWithin(value_f, 0.0f, 1000.0f));
-		TEST_ASSERT(!EQEmu::ValueWithin(value_f, 0.0f, 400.0f));
-		TEST_ASSERT(!EQEmu::ValueWithin(value_f, 600.0f, 900.0f));
+		TEST_ASSERT(EQ::ValueWithin(value_f, 0.0f, 1000.0f));
+		TEST_ASSERT(!EQ::ValueWithin(value_f, 0.0f, 400.0f));
+		TEST_ASSERT(!EQ::ValueWithin(value_f, 600.0f, 900.0f));
 		
-		TEST_ASSERT(EQEmu::ValueWithin(value_i, 0, 1000));
-		TEST_ASSERT(!EQEmu::ValueWithin(value_i, 0, 400));
-		TEST_ASSERT(!EQEmu::ValueWithin(value_i, 600, 900));
+		TEST_ASSERT(EQ::ValueWithin(value_i, 0, 1000));
+		TEST_ASSERT(!EQ::ValueWithin(value_i, 0, 400));
+		TEST_ASSERT(!EQ::ValueWithin(value_i, 600, 900));
 	}
 };
-
-#endif

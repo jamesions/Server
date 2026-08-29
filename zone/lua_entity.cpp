@@ -1,16 +1,35 @@
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
+
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 #ifdef LUA_EQEMU
 
-#include "lua.hpp"
-#include <luabind/luabind.hpp>
-
-#include "entity.h"
 #include "lua_entity.h"
-#include "lua_mob.h"
-#include "lua_client.h"
-#include "lua_npc.h"
-#include "lua_corpse.h"
-#include "lua_object.h"
-#include "lua_door.h"
+
+#include "zone/entity.h"
+#include "zone/lua_bot.h"
+#include "zone/lua_client.h"
+#include "zone/lua_corpse.h"
+#include "zone/lua_door.h"
+#include "zone/lua_merc.h"
+#include "zone/lua_mob.h"
+#include "zone/lua_npc.h"
+#include "zone/lua_object.h"
+
+#include "luabind/luabind.hpp"
 
 bool Lua_Entity::IsClient() {
 	Lua_Safe_Call_Bool();
@@ -67,6 +86,31 @@ bool Lua_Entity::IsBeacon() {
 	return self->IsBeacon();
 }
 
+bool Lua_Entity::IsEncounter() {
+	Lua_Safe_Call_Bool();
+	return self->IsEncounter();
+}
+
+bool Lua_Entity::IsBot() {
+	Lua_Safe_Call_Bool();
+	return self->IsBot();
+}
+
+bool Lua_Entity::IsAura() {
+	Lua_Safe_Call_Bool();
+	return self->IsAura();
+}
+
+bool Lua_Entity::IsOfClientBot() {
+	Lua_Safe_Call_Bool();
+	return self->IsOfClientBot();
+}
+
+bool Lua_Entity::IsOfClientBotMerc() {
+	Lua_Safe_Call_Bool();
+	return self->IsOfClientBotMerc();
+}
+
 int Lua_Entity::GetID() {
 	Lua_Safe_Call_Bool();
 	return self->GetID();
@@ -108,29 +152,48 @@ Lua_Door Lua_Entity::CastToDoor() {
 	return Lua_Door(m);
 }
 
+Lua_Bot Lua_Entity::CastToBot() {
+	void *d = GetLuaPtrData();
+	Bot *b = reinterpret_cast<Bot*>(d);
+	return Lua_Bot(b);
+}
+
+Lua_Merc Lua_Entity::CastToMerc() {
+	void *d = GetLuaPtrData();
+	Merc *m = reinterpret_cast<Merc*>(d);
+	return Lua_Merc(m);
+}
+
 luabind::scope lua_register_entity() {
 	return luabind::class_<Lua_Entity>("Entity")
-		.def(luabind::constructor<>())
-		.property("null", &Lua_Entity::Null)
-		.property("valid", &Lua_Entity::Valid)
-		.def("IsClient", &Lua_Entity::IsClient)
-		.def("IsNPC", &Lua_Entity::IsNPC)
-		.def("IsMob", &Lua_Entity::IsMob)
-		.def("IsMerc", &Lua_Entity::IsMerc)
-		.def("IsCorpse", &Lua_Entity::IsCorpse)
-		.def("IsPlayerCorpse", &Lua_Entity::IsPlayerCorpse)
-		.def("IsNPCCorpse", &Lua_Entity::IsNPCCorpse)
-		.def("IsObject", &Lua_Entity::IsObject)
-		.def("IsDoor", &Lua_Entity::IsDoor)
-		.def("IsTrap", &Lua_Entity::IsTrap)
-		.def("IsBeacon", &Lua_Entity::IsBeacon)
-		.def("GetID", &Lua_Entity::GetID)
-		.def("CastToClient", &Lua_Entity::CastToClient)
-		.def("CastToNPC", &Lua_Entity::CastToNPC)
-		.def("CastToMob", &Lua_Entity::CastToMob)
-		.def("CastToCorpse", &Lua_Entity::CastToCorpse)
-		.def("CastToObject", &Lua_Entity::CastToObject)
-		.def("CastToDoor", &Lua_Entity::CastToDoor);
+	.def(luabind::constructor<>())
+	.property("null", &Lua_Entity::Null)
+	.property("valid", &Lua_Entity::Valid)
+	.def("CastToBot", &Lua_Entity::CastToBot)
+	.def("CastToClient", &Lua_Entity::CastToClient)
+	.def("CastToCorpse", &Lua_Entity::CastToCorpse)
+	.def("CastToDoor", &Lua_Entity::CastToDoor)
+	.def("CastToMerc", &Lua_Entity::CastToMerc)
+	.def("CastToMob", &Lua_Entity::CastToMob)
+	.def("CastToNPC", &Lua_Entity::CastToNPC)
+	.def("CastToObject", &Lua_Entity::CastToObject)
+	.def("GetID", &Lua_Entity::GetID)
+	.def("IsAura", &Lua_Entity::IsAura)
+	.def("IsBeacon", &Lua_Entity::IsBeacon)
+	.def("IsBot", &Lua_Entity::IsBot)
+	.def("IsClient", &Lua_Entity::IsClient)
+	.def("IsCorpse", &Lua_Entity::IsCorpse)
+	.def("IsDoor", &Lua_Entity::IsDoor)
+	.def("IsEncounter", &Lua_Entity::IsEncounter)
+	.def("IsMerc", &Lua_Entity::IsMerc)
+	.def("IsMob", &Lua_Entity::IsMob)
+	.def("IsNPC", &Lua_Entity::IsNPC)
+	.def("IsNPCCorpse", &Lua_Entity::IsNPCCorpse)
+	.def("IsObject", &Lua_Entity::IsObject)
+	.def("IsOfClientBot", &Lua_Entity::IsOfClientBot)
+	.def("IsOfClientBotMerc", &Lua_Entity::IsOfClientBotMerc)
+	.def("IsPlayerCorpse", &Lua_Entity::IsPlayerCorpse)
+	.def("IsTrap", &Lua_Entity::IsTrap);
 }
 
 #endif

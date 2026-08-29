@@ -1,32 +1,29 @@
-/*	EQEMu: Everquest Server Emulator
-	
-	Copyright (C) 2001-2016 EQEMu Development Team (http://eqemulator.net)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
+#pragma once
 
-#ifndef COMMON_SKILLS_H
-#define COMMON_SKILLS_H
+#include "common/types.h"
 
-#include "types.h"
-
-#include <string>
 #include <map>
+#include <string>
+#include <vector>
 
-
-namespace EQEmu
+namespace EQ
 {
 	namespace skills {
 		enum SkillType : int {
@@ -161,16 +158,19 @@ namespace EQEmu
 	// server profile does not reflect this yet..so, prefixed with 'PACKET_'
 #define PACKET_SKILL_ARRAY_SIZE 100
 
+		constexpr int format_as(SkillType skill) { return static_cast<int>(skill); }
+
 		bool IsTradeskill(SkillType skill);
 		bool IsSpecializedSkill(SkillType skill);
 		float GetSkillMeleePushForce(SkillType skill);
 		bool IsBardInstrumentSkill(SkillType skill);
 		bool IsCastingSkill(SkillType skill);
 		int32 GetBaseDamage(SkillType skill);
-		bool IsMeleeDmg(SkillType skill);
 
 		extern const std::map<SkillType, std::string>& GetSkillTypeMap();
+		extern const std::vector<SkillType>& GetExtraDamageSkills();
 
+		std::string GetSkillName(SkillType skill);
 	} /*skills*/
 
 	struct SkillProfile { // prototype - not implemented
@@ -287,7 +287,7 @@ namespace EQEmu
 
 		uint32* GetSkills() { return reinterpret_cast<uint32*>(&Skill); }
 
-		skills::SkillType GetLastUseableSkill() { return EQEmu::skills::Skill2HPiercing; }
+		skills::SkillType GetLastUseableSkill() { return EQ::skills::Skill2HPiercing; }
 
 		size_t GetSkillsArraySize() { return PACKET_SKILL_ARRAY_SIZE; }
 		uint32 GetSkill(int skill_id);
@@ -304,7 +304,5 @@ namespace EQEmu
 
 		uint32 operator[](int skill_id) const { return const_cast<SkillProfile*>(this)->GetSkill(skill_id); }
 	};
-	
-} /*EQEmu*/
 
-#endif /*COMMON_SKILLS_H*/
+} /*EQEmu*/

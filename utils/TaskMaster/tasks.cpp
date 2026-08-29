@@ -1,3 +1,20 @@
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
+
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 #include <wx/wx.h>
 #include <wx/numdlg.h>
 #include <mysql.h>
@@ -195,7 +212,7 @@ void MainFrame::OnRewardButton(wxCommandEvent& event)
 {
 	wxString ridStr = mRewardID->GetValue();
 	int rtype = mRewardMethod->GetCurrentSelection();
-	int rid = atoi(ridStr.mb_str());
+	int rid = Strings::ToInt(ridStr.mb_str());
 
 	ShowRewardChange(rtype,rid);
 }
@@ -224,15 +241,15 @@ void MainFrame::SaveTask(wxCommandEvent& event)
 		getStr.Clear();
 
 		getStr = mTaskMinLvl->GetValue();
-		ourTask.level_min = atoi(getStr.mb_str());
+		ourTask.level_min = Strings::ToInt(getStr.mb_str());
 		getStr.Clear();
 
 		getStr = mTaskMaxLvl->GetValue();
-		ourTask.level_max = atoi(getStr.mb_str());
+		ourTask.level_max = Strings::ToInt(getStr.mb_str());
 		getStr.Clear();
 
 		getStr = mTaskDuration->GetValue();
-		ourTask.duration = atoi(getStr.mb_str());
+		ourTask.duration = Strings::ToInt(getStr.mb_str());
 		getStr.Clear();
 
 		getStr = mRewardName->GetValue();
@@ -240,15 +257,15 @@ void MainFrame::SaveTask(wxCommandEvent& event)
 		getStr.Clear();
 
 		getStr = mRewardID->GetValue();
-		ourTask.rewardid = atoi(getStr.mb_str());
+		ourTask.rewardid = Strings::ToInt(getStr.mb_str());
 		getStr.Clear();
 
 		getStr = mRewardCash->GetValue();
-		ourTask.cashreward = atoi(getStr.mb_str());
+		ourTask.cashreward = Strings::ToInt(getStr.mb_str());
 		getStr.Clear();
 
 		getStr = mRewardXP->GetValue();
-		ourTask.xpreward = atoi(getStr.mb_str());
+		ourTask.xpreward = Strings::ToInt(getStr.mb_str());
 		getStr.Clear();
 
 		int * i = (int*)mStartZone->GetClientData(mStartZone->GetSelection());

@@ -1,7 +1,24 @@
-#ifndef EQTIME_H
-#define EQTIME_H
+/*	EQEmu: EQEmulator
 
-#include "../common/eq_packet_structs.h"
+	Copyright (C) 2001-2026 EQEmu Development Team
+
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
+*/
+#pragma once
+
+#include "common/eq_packet_structs.h"
+
 #include <string>
 
 //Struct
@@ -18,7 +35,7 @@ public:
 	//Constructor/destructor
 	EQTime(TimeOfDay_Struct start_eq, time_t start_real);
 	EQTime();
-	~EQTime();
+	~EQTime() = default;
 
 	//Get functions
 	int GetCurrentEQTimeOfDay( TimeOfDay_Struct *eqTimeOfDay ) { return(GetCurrentEQTimeOfDay(time(nullptr), eqTimeOfDay)); }
@@ -28,6 +45,9 @@ public:
 	uint32 getEQTimeZone() { return timezone; }
 	uint32 getEQTimeZoneHr() { return timezone/60; }
 	uint32 getEQTimeZoneMin() { return timezone%60; }
+	bool IsDayTime();
+	bool IsNightTime();
+	bool IsInbetweenTime(uint8 min_time, uint8 max_time);
 
 	//Set functions
 	int SetCurrentEQTimeOfDay(TimeOfDay_Struct start_eq, time_t start_real);
@@ -45,5 +65,3 @@ private:
 	//This is our tz offset
 	int32 timezone;
 };
-
-#endif

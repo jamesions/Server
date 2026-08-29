@@ -1,8 +1,25 @@
-#include "../common/string_util.h"
+/*	EQEmu: EQEmulator
 
+	Copyright (C) 2001-2026 EQEmu Development Team
+
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 #include "qglobals.h"
-#include "client.h"
-#include "zone.h"
+
+#include "common/strings.h"
+#include "zone/client.h"
+#include "zone/zone.h"
 
 void QGlobalCache::AddGlobal(uint32 id, QGlobal global)
 {
@@ -102,22 +119,6 @@ void QGlobalCache::GetQGlobals(std::list<QGlobal> &globals, NPC *n, Client *c, Z
 	}
 }
 
-bool QGlobalCache::GetQGlobal(QGlobal &g, std::string name, NPC *n, Client *c, Zone *z) {
-	std::list<QGlobal> globals;
-	QGlobalCache::GetQGlobals(globals, n, c, z);
-
-	auto iter = globals.begin();
-	while(iter != globals.end()) {
-		if(iter->name.compare(name) == 0) {
-			g = (*iter);
-			return true;
-		}
-		++iter;
-	}
-
-	return false;
-}
-
 void QGlobalCache::PurgeExpiredGlobals()
 {
 	if(!qGlobalBucket.size())
@@ -171,5 +172,5 @@ void QGlobalCache::LoadBy(const std::string &query)
 		return;
 
 	for (auto row = results.begin(); row != results.end(); ++row)
-		AddGlobal(0, QGlobal(row[0], atoi(row[1]), atoi(row[2]), atoi(row[3]), row[4], row[5] ? atoi(row[5]) : 0xFFFFFFFF));
+		AddGlobal(0, QGlobal(row[0], Strings::ToInt(row[1]), Strings::ToInt(row[2]), Strings::ToInt(row[3]), row[4], row[5] ? Strings::ToInt(row[5]) : 0xFFFFFFFF));
 }

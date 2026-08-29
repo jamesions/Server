@@ -1,34 +1,28 @@
-/*	EQEMu: Everquest Server Emulator
-	Copyright (C) 2001-2002 EQEMu Development Team (http://eqemu.org)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
+#include "eqtime.h"
+
+#include "common/eq_packet_structs.h"
+#include "common/eqemu_logsys.h"
 
 #include <fstream>
-#include "../common/global_define.h"
-#include "../common/eqemu_logsys.h"
-#include "../common/eqtime.h"
-#include "../common/eq_packet_structs.h"
-#include <memory.h>
 #include <iostream>
-	/*#ifdef _CRTDBG_MAP_ALLOC
-		#undef new
-	#endif*/
-	/*#ifdef _CRTDBG_MAP_ALLOC
-		#define new new(_NORMAL_BLOCK, __FILE__, __LINE__)
-	#endif*/
+#include <memory.h>
 
 #define EQT_VERSION 1000
 
@@ -46,20 +40,16 @@ EQTime::EQTime()
 	timezone = 0;
 	memset(&eqTime, 0, sizeof(eqTime));
 	//Defaults for time
-	TimeOfDay_Struct start;
-	start.day = 1;
-	start.hour = 9;
-	start.minute = 0;
-	start.month = 1;
-	start.year = 3100;
+	TimeOfDay_Struct t{};
+	t.day    = 1;
+	t.hour   = 9;
+	t.minute = 0;
+	t.month  = 1;
+	t.year   = 3100;
 	//Set default time zone
 	timezone = 0;
 	//Start EQTimer
-	SetCurrentEQTimeOfDay(start, time(0));
-}
-
-EQTime::~EQTime()
-{
+	SetCurrentEQTimeOfDay(t, time(nullptr));
 }
 
 //getEQTimeOfDay - Reads timeConvert and writes the result to eqTimeOfDay
@@ -203,4 +193,48 @@ void EQTime::ToString(TimeOfDay_Struct *t, std::string &str) {
 		t->month, t->day, t->year, t->hour, t->minute);
 	buf[127] = '\0';
 	str = buf;
+}
+
+bool EQTime::IsDayTime() {
+	TimeOfDay_Struct tod{}; //Day time is 5am to 6:59pm (14 hours in-game)
+	GetCurrentEQTimeOfDay(&tod); //TODO: what if it fails and returns zero?
+
+	if (tod.hour >= 5 || tod.hour < 19) {
+		return true;
+	}
+
+	return false;
+}
+
+bool EQTime::IsNightTime() {
+	TimeOfDay_Struct tod{}; //Night time is 7pm to 4:59am (10 hours in-game)
+	GetCurrentEQTimeOfDay(&tod); //TODO: what if it fails and returns zero?
+
+	if (tod.hour >= 19 || tod.hour < 5) {
+		return true;
+	}
+
+	return false;
+}
+
+bool EQTime::IsInbetweenTime(uint8 min_time, uint8 max_time) {
+	TimeOfDay_Struct tod{};
+	GetCurrentEQTimeOfDay(&tod);
+
+	if (min_time == 0 || max_time == 0 || min_time > 24 || max_time > 24) {
+		return true;
+	}
+
+	if (max_time < min_time) {
+		if ((tod.hour >= min_time && tod.hour > max_time) || (tod.hour < min_time && tod.hour <= max_time)) {
+			return true;
+		}
+	}
+	else {
+		if (tod.hour >= min_time && tod.hour <= max_time) {
+			return true;
+		}
+	}
+
+	return false;
 }

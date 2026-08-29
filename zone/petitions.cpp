@@ -1,68 +1,53 @@
-/*	EQEMu: Everquest Server Emulator
-Copyright (C) 2001-2002 EQEMu Development Team (http://eqemu.org)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
-#include "../common/global_define.h"
-#include "../common/eqemu_logsys.h"
-#include <string.h>
-#ifdef _WINDOWS
-#include <process.h>
-#else
-#include <pthread.h>
-#endif
-
-#ifdef _WINDOWS
-	#define snprintf	_snprintf
-	#define strncasecmp	_strnicmp
-	#define strcasecmp	_stricmp
-#endif
-
-
-#include "../common/eq_packet_structs.h"
-#include "../common/servertalk.h"
-#include "../common/string_util.h"
-
-#include "entity.h"
 #include "petitions.h"
-#include "worldserver.h"
 
-PetitionList petition_list;
+#include "common/eq_packet_structs.h"
+#include "common/eqemu_logsys.h"
+#include "common/servertalk.h"
+#include "common/strings.h"
+#include "zone/entity.h"
+#include "zone/worldserver.h"
+
+#include <cstring>
 
 extern WorldServer worldserver;
 
 void Petition::SendPetitionToPlayer(Client* clientto) {
 	auto outapp = new EQApplicationPacket(OP_PetitionCheckout, sizeof(Petition_Struct));
 	Petition_Struct* pet = (Petition_Struct*) outapp->pBuffer;
-	strcpy(pet->accountid,this->GetAccountName());
-	strcpy(pet->lastgm,this->GetLastGM());
-	strcpy(pet->charname,this->GetCharName());
-	pet->petnumber = this->petid;
-	pet->charclass = this->GetCharClass();
-	pet->charlevel = this->GetCharLevel();
-	pet->charrace = this->GetCharRace();
-	pet->zone = this->GetZone();
-	//strcpy(pet->zone,this->GetZone());
-	strcpy(pet->petitiontext,this->GetPetitionText());
-	pet->checkouts = this->GetCheckouts();
-	pet->unavail = this->GetUnavails();
-	pet->senttime = this->GetSentTime();
+	strcpy(pet->accountid,GetAccountName());
+	strcpy(pet->lastgm,GetLastGM());
+	strcpy(pet->charname,GetCharName());
+	pet->petnumber = petid;
+	pet->charclass = GetCharClass();
+	pet->charlevel = GetCharLevel();
+	pet->charrace = GetCharRace();
+	pet->zone = GetZone();
+	//strcpy(pet->zone,GetZone());
+	strcpy(pet->petitiontext,GetPetitionText());
+	pet->checkouts = GetCheckouts();
+	pet->unavail = GetUnavails();
+	pet->senttime = GetSentTime();
 	//memset(pet->unknown5, 0, sizeof(pet->unknown5));
 	//pet->unknown5[3] = 0x1f;
-	pet->urgency = this->GetUrgency();
-	strcpy(pet->gmtext, this->GetGMText());
+	pet->urgency = GetUrgency();
+	strcpy(pet->gmtext, GetGMText());
 	clientto->QueuePacket(outapp);
 	safe_delete(outapp);
 	return;
@@ -71,8 +56,8 @@ void Petition::SendPetitionToPlayer(Client* clientto) {
 Petition::Petition(uint32 id)
 {
 	petid = id;
-	charclass = 0;
-	charrace = 0;
+	charclass = Class::None;
+	charrace = Race::Doug;
 	charlevel = 0;
 	checkouts = 0;
 	unavailables = 0;
@@ -85,7 +70,7 @@ Petition::Petition(uint32 id)
 	memset(petitiontext, 0, sizeof(petitiontext));
 	memset(gmtext, 0, sizeof(gmtext));
 
-	//memset(this->zone, 0, sizeof(this->zone));
+	//memset(zone, 0, sizeof(zone));
 	zone = 1;
 }
 Petition* PetitionList::GetPetitionByID(uint32 id_in) {
@@ -150,10 +135,11 @@ void PetitionList::AddPetition(Petition* pet) {
 }
 
 //Return Values: 0 = Ok ; -1 = Error deleting petition.
-int PetitionList::DeletePetition(uint32 petnumber) {
+int PetitionList::DeletePetition(uint32 petnumber)
+{
 	LinkedListIterator<Petition*> iterator(list);
 	iterator.Reset();
-	LockMutex lock(&PList_Mutex);
+	std::scoped_lock lock(PList_Mutex);
 	while(iterator.MoreElements()) {
 		if (iterator.GetData()->GetID() == petnumber) {
 			database.DeletePetitionFromDB(iterator.GetData());
@@ -194,18 +180,18 @@ void PetitionList::ClearPetitions() {
 	return;
 }
 
-void PetitionList::ReadDatabase() {
-	LockMutex lock(&PList_Mutex);
+void PetitionList::ReadDatabase()
+{
+	std::scoped_lock lock(PList_Mutex);
 	ClearPetitions();
 	database.RefreshPetitionsFromDB();
 	UpdateGMQueue();
-	return;
 }
 
-void PetitionList::UpdatePetition(Petition* pet) {
-	LockMutex lock(&PList_Mutex);
+void PetitionList::UpdatePetition(Petition* pet)
+{
+	std::scoped_lock lock(PList_Mutex);
 	database.UpdatePetitionToDB(pet);
-	return;
 }
 
 void ZoneDatabase::DeletePetitionFromDB(Petition* wpet) {
@@ -252,7 +238,7 @@ void ZoneDatabase::InsertPetitionToDB(Petition* wpet)
 	}
 
 #if EQDEBUG >= 5
-		Log.Out(Logs::General, Logs::None, "New petition created");
+		LogDebug("New petition created");
 #endif
 
 }
@@ -270,26 +256,26 @@ void ZoneDatabase::RefreshPetitionsFromDB()
 	}
 
     for (auto row = results.begin(); row != results.end(); ++row) {
-        newpet = new Petition(atoi(row[0]));
+        newpet = new Petition(Strings::ToInt(row[0]));
         newpet->SetCName(row[1]);
         newpet->SetAName(row[2]);
         newpet->SetLastGM(row[3]);
         newpet->SetPetitionText(row[4]);
-        newpet->SetZone(atoi(row[5]));
-        newpet->SetUrgency(atoi(row[6]));
-        newpet->SetClass(atoi(row[7]));
-        newpet->SetRace(atoi(row[8]));
-        newpet->SetLevel(atoi(row[9]));
-        newpet->SetCheckouts(atoi(row[10]));
-        newpet->SetUnavails(atoi(row[11]));
-        newpet->SetSentTime2(atol(row[13]));
+        newpet->SetZone(Strings::ToInt(row[5]));
+        newpet->SetUrgency(Strings::ToInt(row[6]));
+        newpet->SetClass(Strings::ToInt(row[7]));
+        newpet->SetRace(Strings::ToInt(row[8]));
+        newpet->SetLevel(Strings::ToInt(row[9]));
+        newpet->SetCheckouts(Strings::ToInt(row[10]));
+        newpet->SetUnavails(Strings::ToInt(row[11]));
+        newpet->SetSentTime(atol(row[13]));
         newpet->SetGMText(row[14]);
 
-        if (atoi(row[12]) == 1)
+        if (Strings::ToInt(row[12]) == 1)
             newpet->SetCheckedOut(true);
         else
             newpet->SetCheckedOut(false);
-        petition_list.AddPetition(newpet);
+        PetitionList::Instance()->AddPetition(newpet);
     }
 
 }

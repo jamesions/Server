@@ -1,30 +1,27 @@
-/*	EQEMu: Everquest Server Emulator
-	Copyright (C) 2001-2008 EQEMu Development Team (http://eqemulator.net)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
-
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
+#pragma once
 
-#ifndef CHATSERVER_CLIENTLIST_H
-#define CHATSERVER_CLIENTLIST_H
+#include "common/net/eqstream.h"
+#include "common/opcodemgr.h"
+#include "common/rulesys.h"
+#include "ucs/chatchannel.h"
 
-#include "../common/opcodemgr.h"
-#include "../common/eq_stream_type.h"
-#include "../common/eq_stream_factory.h"
-#include "../common/rulesys.h"
-#include "chatchannel.h"
 #include <list>
 #include <vector>
 
@@ -84,35 +81,36 @@ struct CharacterEntry {
 class Client {
 
 public:
-	Client(std::shared_ptr<EQStream> eqs);
+	Client(std::shared_ptr<EQStreamInterface> eqs);
 	~Client();
 
-	std::shared_ptr<EQStream> ClientStream;
+	std::shared_ptr<EQStreamInterface> ClientStream;
 	void AddCharacter(int CharID, const char *CharacterName, int Level);
 	void ClearCharacters() { Characters.clear(); }
 	void SendMailBoxes();
 	inline void QueuePacket(const EQApplicationPacket *p, bool ack_req=true) { ClientStream->QueuePacket(p, ack_req); }
 	std::string GetName() { if(Characters.size()) return Characters[0].Name; else return ""; }
-	void JoinChannels(std::string ChannelList);
-	void LeaveChannels(std::string ChannelList);
-	void LeaveAllChannels(bool SendUpdatedChannelList = true);
+	void JoinChannels(std::string& channel_name_list, bool command_directed = false);
+	void LeaveChannels(std::string& channel_name_list, bool command_directed = false);
+	void LeaveAllChannels(bool send_updated_channel_list = true, bool command_directed = false);
 	void AddToChannelList(ChatChannel *JoinedChannel);
 	void RemoveFromChannelList(ChatChannel *JoinedChannel);
 	void SendChannelMessage(std::string Message);
-	void SendChannelMessage(std::string ChannelName, std::string Message, Client *Sender);
+	void SendChannelMessage(const std::string& ChannelName, const std::string& Message, Client *Sender);
 	void SendChannelMessageByNumber(std::string Message);
 	void SendChannelList();
 	void CloseConnection();
-	void ToggleAnnounce(std::string State);
+	void ToggleAnnounce(const std::string& State);
 	bool IsAnnounceOn() { return (Announce == true); }
 	void AnnounceJoin(ChatChannel *Channel, Client *c);
 	void AnnounceLeave(ChatChannel *Channel, Client *c);
-	void GeneralChannelMessage(std::string Message);
+	void GeneralChannelMessage(const std::string& Message);
 	void GeneralChannelMessage(const char *Characters);
 	void SetChannelPassword(std::string ChannelPassword);
-	void ProcessChannelList(std::string CommandString);
+	void ProcessChannelList(const std::string& Input);
 	void AccountUpdate();
 	int ChannelCount();
+	std::string RemoveDuplicateChannels(std::string& in_channels);
 	inline void SetAccountID(int inAccountID) { AccountID = inAccountID; }
 	inline int GetAccountID() { return AccountID; }
 	inline void SetAccountStatus(int inStatus) { Status = inStatus; }
@@ -139,16 +137,20 @@ public:
 	inline bool GetForceDisconnect() { return ForceDisconnect; }
 	std::string MailBoxName();
 	int GetMailBoxNumber() { return CurrentMailBox; }
-	int GetMailBoxNumber(std::string CharacterName);
+	int GetMailBoxNumber(const std::string& CharacterName);
+
 	void SetConnectionType(char c);
 	ConnectionType GetConnectionType() { return TypeOfConnection; }
+	EQ::versions::ClientVersion GetClientVersion() { return ClientVersion_; }
+
 	inline bool IsMailConnection() { return (TypeOfConnection == ConnectionTypeMail) || (TypeOfConnection == ConnectionTypeCombined); }
-	void SendNotification(int MailBoxNumber, std::string From, std::string Subject, int MessageID);
+	void SendNotification(int MailBoxNumber, const std::string& Subject, const std::string& From, int MessageID);
 	void ChangeMailBox(int NewMailBox);
 	inline void SetMailBox(int NewMailBox) { CurrentMailBox = NewMailBox; }
 	void SendFriends();
 	int GetCharID();
 	void SendUptime();
+	void SendKeepAlive();
 
 private:
 	unsigned int CurrentMailBox;
@@ -168,7 +170,9 @@ private:
 	Timer *GlobalChatLimiterTimer; //60 seconds
 	int AttemptedMessages;
 	bool ForceDisconnect;
+
 	ConnectionType TypeOfConnection;
+	EQ::versions::ClientVersion ClientVersion_;
 	bool UnderfootOrLater;
 };
 
@@ -178,18 +182,16 @@ public:
 	Clientlist(int MailPort);
 	void	Process();
 	void	CloseAllConnections();
-	Client *FindCharacter(std::string CharacterName);
+	Client *FindCharacter(const std::string& CharacterName);
+	void	CheckForStaleConnectionsAll();
 	void	CheckForStaleConnections(Client *c);
-	Client *IsCharacterOnline(std::string CharacterName);
-	void ProcessOPMailCommand(Client *c, std::string CommandString);
+	Client *IsCharacterOnline(const std::string& CharacterName);
+	void ProcessOPMailCommand(Client* c, std::string command_string, bool command_directed = false);
 
 private:
-
-	EQStreamFactory *chatsf;
+	EQ::Net::EQStreamManager *chatsf;
 
 	std::list<Client*> ClientChatConnections;
 
 	OpcodeManager *ChatOpMgr;
 };
-
-#endif

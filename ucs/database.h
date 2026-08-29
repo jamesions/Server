@@ -1,72 +1,60 @@
-/*	EQEMu: Everquest Server Emulator
-	Copyright (C) 2001-2008 EQEMu Development Team (http://eqemulator.net)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
-
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
+#pragma once
 
-#ifndef CHATSERVER_DATABASE_H
-#define CHATSERVER_DATABASE_H
+#include "common/database.h"
+#include "common/database.h"
+#include "common/linked_list.h"
+#include "common/shareddb.h"
+#include "common/types.h"
+#include "ucs/chatchannel.h"
+#include "ucs/clientlist.h"
+
+#include <map>
+#include <string>
+#include <vector>
 
 #define AUTHENTICATION_TIMEOUT	60
 #define INVALID_ID				0xFFFFFFFF
 
-#include "../common/global_define.h"
-#include "../common/types.h"
-#include "../common/dbcore.h"
-#include "../common/linked_list.h"
-#include "clientlist.h"
-#include <string>
-#include <vector>
-#include <map>
-
-//atoi is not uint32 or uint32 safe!!!!
-#define atoul(str) strtoul(str, nullptr, 10)
-
-class Database : public DBcore {
+class UCSDatabase : public Database {
 public:
-	Database();
-	Database(const char* host, const char* user, const char* passwd, const char* database,uint32 port);
-	bool Connect(const char* host, const char* user, const char* passwd, const char* database,uint32 port);
-	~Database();
-
 	int FindAccount(const char *CharacterName, Client *c);
 	int FindCharacter(const char *CharacterName);
-	bool VerifyMailKey(std::string CharacterName, int IPAddress, std::string MailKey);
+	bool VerifyMailKey(const std::string& characterName, int IPAddress, const std::string& MailKey);
 	bool GetVariable(const char* varname, char* varvalue, uint16 varvalue_len);
 	bool LoadChatChannels();
+	void LoadReservedNamesFromDB();
+	void LoadFilteredNamesFromDB();
+	bool CheckChannelNameFilter(const std::string& channel_name);
+	void SaveChatChannel(const std::string& channel_name, const std::string& channel_owner, const std::string& channel_password, const uint16& min_status);
+	void DeleteChatChannel(const std::string& channel_name);
+	int CurrentPlayerChannelCount(const std::string& player_name);
+	std::vector<std::string> CurrentPlayerChannels(const std::string& player_name);
 	void GetAccountStatus(Client *c);
-	void SetChannelPassword(std::string ChannelName, std::string Password);
-	void SetChannelOwner(std::string ChannelName, std::string Owner);
+	void SetChannelPassword(const std::string& channel_name, const std::string& password);
+	void SetChannelOwner(const std::string& channel_name, const std::string& owner);
 	void SendHeaders(Client *c);
-	void SendBody(Client *c, int MessageNumber);
-	bool SendMail(std::string Recipient, std::string From, std::string Subject, std::string Body, std::string RecipientsString);
-	void SetMessageStatus(int MessageNumber, int Status);
+	void SendBody(Client *c, const int& message_number);
+	bool SendMail(const std::string& recipient, const std::string& from, const std::string& subject, const std::string& body, const std::string& recipients_string);
+	void SetMessageStatus(const int& message_number, const int& Status);
 	void ExpireMail();
-	void AddFriendOrIgnore(int CharID, int Type, std::string Name);
-	void RemoveFriendOrIgnore(int CharID, int Type, std::string Name);
-	void GetFriendsAndIgnore(int CharID, std::vector<std::string> &Friends, std::vector<std::string> &Ignorees); 
-	void LoadLogSettings(EQEmuLogSys::LogSettings* log_settings);
-
-
-protected:
-	void HandleMysqlError(uint32 errnum);
-private:
-	void DBInitVars();
-
+	void AddFriendOrIgnore(const int& char_id, const int& type, const std::string& name);
+	void RemoveFriendOrIgnore(const int& char_id, const int& type, const std::string& name);
+	void GetFriendsAndIgnore(const int& char_id, std::vector<std::string> &Friends, std::vector<std::string> &Ignorees);
 };
-
-#endif
-

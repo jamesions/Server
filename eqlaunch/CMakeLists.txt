@@ -1,40 +1,22 @@
-CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
+cmake_minimum_required(VERSION 3.20)
 
-SET(eqlaunch_sources
+set(eqlaunch_sources
 	eqlaunch.cpp
 	worldserver.cpp
 	zone_launch.cpp
 )
 
-SET(eqlaunch_headers
+set(eqlaunch_headers
 	worldserver.h
 	zone_launch.h
 )
 
-ADD_EXECUTABLE(eqlaunch ${eqlaunch_sources} ${eqlaunch_headers})
+add_executable(eqlaunch ${eqlaunch_sources} ${eqlaunch_headers})
 
-INSTALL(TARGETS eqlaunch RUNTIME DESTINATION ${CMAKE_INSTALL_PREFIX})
+install(TARGETS eqlaunch RUNTIME DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
 
-TARGET_LINK_LIBRARIES(eqlaunch common debug ${MySQL_LIBRARY_DEBUG} optimized ${MySQL_LIBRARY_RELEASE} ${ZLIB_LIBRARY})
+target_link_libraries(eqlaunch common)
+target_include_directories(eqlaunch PRIVATE ..)
 
-IF(MSVC)
-	SET_TARGET_PROPERTIES(eqlaunch PROPERTIES LINK_FLAGS_RELEASE "/OPT:REF /OPT:ICF")
-	TARGET_LINK_LIBRARIES(eqlaunch "Ws2_32.lib")
-ENDIF(MSVC)
-
-IF(MINGW)
-	TARGET_LINK_LIBRARIES(eqlaunch "WS2_32")
-ENDIF(MINGW)
-
-IF(UNIX)
-	TARGET_LINK_LIBRARIES(eqlaunch "${CMAKE_DL_LIBS}")
-	TARGET_LINK_LIBRARIES(eqlaunch "z")
-	TARGET_LINK_LIBRARIES(eqlaunch "m")
-	IF(NOT DARWIN)
-		TARGET_LINK_LIBRARIES(eqlaunch "rt")
-	ENDIF(NOT DARWIN)
-	TARGET_LINK_LIBRARIES(eqlaunch "pthread")
-	ADD_DEFINITIONS(-fPIC)
-ENDIF(UNIX)
-
-SET(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin)
+set(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin)
+set_property(TARGET eqlaunch PROPERTY FOLDER executables/tools)

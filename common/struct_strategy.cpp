@@ -1,9 +1,26 @@
+/*	EQEmu: EQEmulator
 
-#include "global_define.h"
-#include "eqemu_logsys.h"
+	Copyright (C) 2001-2026 EQEmu Development Team
+
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 #include "struct_strategy.h"
 
-#include "eq_stream.h"
+#include "common/eq_stream_intf.h"
+#include "common/eqemu_logsys.h"
+#include "common/opcodemgr.h"
+
 #include <map>
 #include <memory>
 
@@ -18,7 +35,7 @@ StructStrategy::StructStrategy() {
 	}
 }
 
-void StructStrategy::Encode(EQApplicationPacket **p, std::shared_ptr<EQStream> dest, bool ack_req) const {
+void StructStrategy::Encode(EQApplicationPacket **p, std::shared_ptr<EQStreamInterface> dest, bool ack_req) const {
 	if((*p)->GetOpcodeBypass() != 0) {
 		PassEncoder(p, dest, ack_req);
 		return;
@@ -36,21 +53,21 @@ void StructStrategy::Decode(EQApplicationPacket *p) const {
 }
 
 
-void StructStrategy::ErrorEncoder(EQApplicationPacket **in_p, std::shared_ptr<EQStream> dest, bool ack_req) {
+void StructStrategy::ErrorEncoder(EQApplicationPacket **in_p, std::shared_ptr<EQStreamInterface> dest, bool ack_req) {
 	EQApplicationPacket *p = *in_p;
 	*in_p = nullptr;
 
-	Log.Out(Logs::General, Logs::Netcode, "[STRUCTS] Error encoding opcode %s: no encoder provided. Dropping.", OpcodeManager::EmuToName(p->GetOpcode()));
+	LogNetcode("[STRUCTS] Error encoding opcode [{}]: no encoder provided. Dropping", OpcodeManager::EmuToName(p->GetOpcode()));
 
 	delete p;
 }
 
 void StructStrategy::ErrorDecoder(EQApplicationPacket *p) {
-	Log.Out(Logs::General, Logs::Netcode, "[STRUCTS] Error decoding opcode %s: no decoder provided. Invalidating.", OpcodeManager::EmuToName(p->GetOpcode()));
+	LogNetcode("[STRUCTS] Error decoding opcode [{}]: no decoder provided. Invalidating", OpcodeManager::EmuToName(p->GetOpcode()));
 	p->SetOpcode(OP_Unknown);
 }
 
-void StructStrategy::PassEncoder(EQApplicationPacket **p, std::shared_ptr<EQStream> dest, bool ack_req) {
+void StructStrategy::PassEncoder(EQApplicationPacket **p, std::shared_ptr<EQStreamInterface> dest, bool ack_req) {
 	dest->FastQueuePacket(p, ack_req);
 }
 
@@ -70,37 +87,4 @@ namespace StructStrategyFactory {
 		strategies[first_opcode] = structs;
 	}
 
-	const StructStrategy *FindPatch(EmuOpcode first_opcode) {
-		std::map<EmuOpcode, const StructStrategy *>::const_iterator res;
-		res = strategies.find(first_opcode);
-		if(res == strategies.end())
-			return(nullptr);
-		return(res->second);
-	}
-
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

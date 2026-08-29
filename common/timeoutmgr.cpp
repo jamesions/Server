@@ -1,25 +1,23 @@
-/*	EQEMu: Everquest Server Emulator
-	Copyright (C) 2001-2005 EQEMu Development Team (http://eqemulator.net)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
-#include "../common/global_define.h"
+#include "timeoutmgr.h"
 
 //#define TIMEOUT_DEBUG
-
-#include "timeoutmgr.h"
 
 Timeoutable::Timeoutable(uint32 check_frequency)
  : next_check(check_frequency)
@@ -42,9 +40,6 @@ void TimeoutManager::CheckTimeouts() {
 	for(; cur != end; ++cur) {
 		Timeoutable *it = *cur;
 		if(it->next_check.Check()) {
-#ifdef TIMEOUT_DEBUG
-			Log.Out(Logs::General, Logs::None,, "Checking timeout on 0x%x\n", it);
-#endif
 			it->CheckTimeout();
 		}
 	}
@@ -57,15 +52,9 @@ void TimeoutManager::AddMember(Timeoutable *who) {
 
 	DeleteMember(who);	//just in case... prolly not needed.
 	members.push_back(who);
-#ifdef TIMEOUT_DEBUG
-	Log.Out(Logs::General, Logs::None,, "Adding timeoutable 0x%x\n", who);
-#endif
 }
 
 void TimeoutManager::DeleteMember(Timeoutable *who) {
-#ifdef TIMEOUT_DEBUG
-	Log.Out(Logs::General, Logs::None,, "Removing timeoutable 0x%x\n", who);
-#endif
 	std::vector<Timeoutable *>::iterator cur,end;
 	cur = members.begin();
 	end = members.end();

@@ -1,38 +1,49 @@
-/*	EQEMu: Everquest Server Emulator
-	Copyright (C) 2001-2014 EQEMu Development Team (http://eqemulator.net)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
-
-#ifndef __random_h__
-#define __random_h__
+#pragma once
 
 #include <random>
-#include <utility>
 #include <algorithm>
 #include <iterator>
 #include <type_traits>
 
-/* This uses mt19937 seeded with the std::random_device
- * The idea is to have this be included as a member of another class
- * so mocking out for testing is easier
- * If you need to reseed random.Reseed()
+#ifdef USE_SFMT19937
+// only GCC supports, so lets turn it off
+#ifndef __GNUC__
+#undef USE_SFMT19937
+#endif
+#ifdef __clang__
+#undef USE_SFMT19937
+#endif
+#endif
+
+#ifdef USE_ADDITIVE_LFIB_PRNG
+#include "common/additive_lagged_fibonacci_engine.h"
+#elif defined(USE_SFMT19937)
+#include <ext/random>
+#endif
+
+/* This uses mt19937 (or other compatible engine) seeded with the std::random_device. The idea is to have this be
+ * included as a member of another class so mocking out for testing is easier If you need to reseed random.Reseed()
  * Eventually this should be derived from an abstract base class
  */
 
-namespace EQEmu {
+namespace EQ {
 	class Random {
 	public:
 		// AKA old MakeRandomInt
@@ -40,7 +51,12 @@ namespace EQEmu {
 		{
 			if (low > high)
 				std::swap(low, high);
+// EQ uses biased int distribution, so I guess we can support it :P
+#ifdef BIASED_INT_DIST
+			return low + m_gen() % (high - low + 1);
+#else
 			return int_dist(m_gen, int_param_t(low, high)); // [low, high]
+#endif
 		}
 
 		// AKA old MakeRandomFloat
@@ -80,7 +96,7 @@ namespace EQEmu {
 		{
 			static_assert(std::is_same<std::random_access_iterator_tag,
 					typename std::iterator_traits<RandomAccessIterator>::iterator_category>::value,
-					"EQEmu::Random::Shuffle requires random access iterators");
+					"EQ::Random::Shuffle requires random access iterators");
 			std::shuffle(first, last, m_gen);
 		}
 
@@ -97,14 +113,30 @@ namespace EQEmu {
 			Reseed();
 		}
 
+		static Random* Instance()
+		{
+			static Random instance;
+			return &instance;
+		}
+
 	private:
+#ifndef BIASED_INT_DIST
 		typedef std::uniform_int_distribution<int>::param_type int_param_t;
-		typedef std::uniform_real_distribution<double>::param_type real_param_t;
-		std::mt19937 m_gen;
 		std::uniform_int_distribution<int> int_dist;
+#endif
+		typedef std::uniform_real_distribution<double>::param_type real_param_t;
 		std::uniform_real_distribution<double> real_dist;
+// define USE_CUSTOM_PRNG_ENGINE to any supported random engine like:
+// #define USE_CUSTOM_PRNG_ENGINE std::default_random_engine
+#ifdef USE_ADDITIVE_LFIB_PRNG
+		EQRand
+#elif defined(USE_SFMT19937)
+		__gnu_cxx::sfmt19937
+#elif defined(USE_CUSTOM_PRNG_ENGINE)
+		USE_CUSTOM_PRNG_ENGINE
+#else
+		std::mt19937
+#endif
+		m_gen;
 	};
 }
-
-#endif /* !__random_h__ */
-

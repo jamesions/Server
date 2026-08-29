@@ -1,38 +1,36 @@
-/*	EQEMu: Everquest Server Emulator
-	Copyright (C) 2001-2005 EQEMu Development Team (http://eqemu.org)
+/*	EQEmu: EQEmulator
+
+	Copyright (C) 2001-2026 EQEmu Development Team
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; version 2 of the License.
+	the Free Software Foundation; either version 3 of the License, or
+	(at your option) any later version.
 
 	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY except by those people which sell it, which
-	are required to give you total support for your newly bought product;
-	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+	along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
-
-#include "global_define.h"
-
-#include "timer.h"
 #include "ptimer.h"
-#include "database.h"
-#include "string_util.h"
+
+#include "common/database.h"
+#include "common/strings.h"
+#include "common/timer.h"
 
 #ifdef _WINDOWS
-	#include <winsock2.h>
-	#include <windows.h>
-	int gettimeofday (timeval *tp, ...);
+#include <winsock2.h>
+#include <windows.h>
+int gettimeofday (timeval *tp, ...);
 #else
-	#include <sys/time.h>
+#include <sys/time.h>
 #endif
 
 #if EQDEBUG > 10
-	#define DEBUG_PTIMERS
+#define DEBUG_PTIMERS
 #endif
 
 
@@ -134,7 +132,6 @@ bool PersistentTimer::Load(Database *db) {
                                     (unsigned long)_char_id, _type);
     auto results = db->QueryDatabase(query);
 	if (!results.Success()) {
-		Log.Out(Logs::General, Logs::Error, "Error in PersistentTimer::Load, error: %s", results.ErrorMessage().c_str());
 		return false;
 	}
 
@@ -165,9 +162,6 @@ bool PersistentTimer::Store(Database *db) {
 #endif
     auto results = db->QueryDatabase(query);
 	if (!results.Success()) {
-#if EQDEBUG > 5
-		Log.Out(Logs::General, Logs::Error, "Error in PersistentTimer::Store, error: %s", results.ErrorMessage().c_str());
-#endif
 		return false;
 	}
 
@@ -185,9 +179,6 @@ bool PersistentTimer::Clear(Database *db) {
 
     auto results = db->QueryDatabase(query);
 	if (!results.Success()) {
-#if EQDEBUG > 5
-		Log.Out(Logs::General, Logs::Error, "Error in PersistentTimer::Clear, error: %s", results.ErrorMessage().c_str());
-#endif
 		return false;
 	}
 
@@ -197,10 +188,6 @@ bool PersistentTimer::Clear(Database *db) {
 
 /* This function checks if the timer triggered */
 bool PersistentTimer::Expired(Database *db, bool iReset) {
-	if (this == nullptr) {
-		Log.Out(Logs::General, Logs::Error, "Null timer during ->Check()!?\n");
-		return(true);
-	}
 	uint32 current_time = get_current_time();
 	if (current_time-start_time >= timer_time) {
 		if (enabled && iReset) {
@@ -289,9 +276,6 @@ bool PTimerList::Load(Database *db) {
                                     (unsigned long)_char_id);
     auto results = db->QueryDatabase(query);
 	if (!results.Success()) {
-#if EQDEBUG > 5
-		Log.Out(Logs::General, Logs::Error, "Error in PersistentTimer::Load, error: %s", results.ErrorMessage().c_str());
-#endif
 		return false;
 	}
 
@@ -302,9 +286,9 @@ bool PTimerList::Load(Database *db) {
 	PersistentTimer *cur;
 
     for (auto row = results.begin(); row != results.end(); ++row) {
-		type = atoi(row[0]);
-		start_time = strtoul(row[1], nullptr, 10);
-		timer_time = strtoul(row[2], nullptr, 10);
+		type = Strings::ToUnsignedInt(row[0]);
+		start_time = Strings::ToUnsignedInt(row[1]);
+		timer_time = Strings::ToUnsignedInt(row[2]);
 		enabled = (row[3][0] == '1');
 
 		//if it expired allready, dont bother.
@@ -348,9 +332,6 @@ bool PTimerList::Clear(Database *db) {
 #endif
     auto results = db->QueryDatabase(query);
 	if (!results.Success()) {
-#if EQDEBUG > 5
-		Log.Out(Logs::General, Logs::Error, "Error in PersistentTimer::Clear, error: %s", results.ErrorMessage().c_str());
-#endif
 		return false;
 	}
 
@@ -440,9 +421,6 @@ bool PTimerList::ClearOffline(Database *db, uint32 char_id, pTimerType type) {
 #endif
     auto results = db->QueryDatabase(query);
 	if (!results.Success()) {
-#if EQDEBUG > 5
-		Log.Out(Logs::General, Logs::Error, "Error in PTimerList::ClearOffline, error: %s", results.ErrorMessage().c_str());
-#endif
 		return false;
 	}
 
